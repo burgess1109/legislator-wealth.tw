@@ -149,7 +149,6 @@ export function HoldingsPie({ holdings }: { holdings: HoldingRow[] }) {
 
   const visibleRows = showAll ? portfolio.rows : portfolio.rows.slice(0, MAX_VISIBLE_ROWS)
   const hiddenRows = showAll ? [] : portfolio.rows.slice(MAX_VISIBLE_ROWS)
-  const maxMetric = Math.max(...portfolio.rows.map(row => row.value), 1)
   const hiddenValue = hiddenRows.reduce((sum, row) => sum + row.value, 0)
 
   return (
@@ -157,7 +156,6 @@ export function HoldingsPie({ holdings }: { holdings: HoldingRow[] }) {
       <div className="overflow-hidden border">
         {visibleRows.map((row, index) => {
           const quantity = formatQuantity(row)
-          const barWidth = Math.max(3, (row.value / maxMetric) * 100)
 
           return (
             <div
@@ -197,18 +195,10 @@ export function HoldingsPie({ holdings }: { holdings: HoldingRow[] }) {
               </div>
 
               <div className="mt-3 flex items-center gap-3 pl-9">
-                <div className="h-1.5 min-w-0 flex-1 bg-muted">
-                  <div
-                    className="h-full"
-                    style={{ width: `${barWidth}%`, backgroundColor: row.color }}
-                    aria-hidden="true"
-                  />
-                </div>
-                <div className="shrink-0 text-right text-xs tabular-nums">
-                  <div className="font-semibold">{formatPct(row.pct)}</div>
-                  <div className="text-muted-foreground">
-                    <CurrencyDisplay amount={row.value} />
-                  </div>
+                <div className="text-xs tabular-nums text-muted-foreground">
+                  <span className="font-semibold text-foreground">{formatPct(row.pct)}</span>
+                  <span className="mx-1.5">·</span>
+                  <CurrencyDisplay amount={row.value} />
                 </div>
               </div>
             </div>
