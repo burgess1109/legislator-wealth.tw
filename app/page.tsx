@@ -1,235 +1,169 @@
-import { getAllDeclarations, getAggregatedStocks, lookupStockPrice, getLegislatorMeta, getSlugByName, PARTY_NAME_TO_SLUG } from '@/lib/data'
-import { CurrencyDisplay } from '@/components/currency-display'
-import { SearchableList } from '@/components/searchable-list'
-import { PartyBarChart, type StockBarData } from '@/components/party-bar-chart'
-import { JsonLd } from '@/components/json-ld'
-import { DataDateStatus } from '@/components/data-date-status'
-import Link from 'next/link'
-/* eslint-disable @next/next/no-img-element */
-import type { LegislatorDeclaration } from '@/lib/types'
+import { CountUp } from "@/components/count-up"
+import { JsonLd } from "@/components/json-ld"
+import {
+  getAllCouncilorDeclarations,
+  getAllDeclarations,
+  getAllMayorDeclarations,
+  getHoldingStat,
+} from "@/lib/data"
+import { createWebSiteJsonLd } from "@/lib/structured-data"
+import {
+  RiArrowRightLine,
+  RiBankLine,
+  RiBuilding2Line,
+  RiUserStarLine,
+} from "@remixicon/react"
+import Link from "next/link"
 
-function calcMarketTotal(decl: LegislatorDeclaration): number {
-  let total = 0
-  for (const s of decl.securities.stocks.items) {
-    const p = lookupStockPrice(s.name, 'stock')
-    total += p ? Math.round(s.shares * p.price) : s.ntdTotal
-  }
-  for (const f of decl.securities.funds.items) {
-    const p = lookupStockPrice(f.name, 'fund')
-    total += p ? Math.round(f.units * p.price) : f.ntdTotal
-  }
-  return total
+export const metadata = {
+  title: {
+    absolute: "政治人物持股 — 立委、議員、縣市首長",
+  },
+  description:
+    "台灣民意代表與地方首長持股資料入口，分類瀏覽立法委員、縣市議員與縣市首長資料。",
 }
 
-const PARTY_BORDER: Record<string, string> = {
-  '中國國民黨': 'border-l-[#1a5ccc]',
-  '民主進步黨': 'border-l-[#1B9431]',
-  '台灣民眾黨': 'border-l-[#28C8C8]',
-  '無黨籍': 'border-l-[#999999]',
-}
+export default function PortalPage() {
+  const legislatorStat = getHoldingStat(getAllDeclarations())
+  const councilorStat = getHoldingStat(getAllCouncilorDeclarations())
+  const mayorStat = getHoldingStat(getAllMayorDeclarations())
 
-const PARTY_BAR: Record<string, string> = {
-  '中國國民黨': 'bar-kmt',
-  '民主進步黨': 'bar-dpp',
-  '台灣民眾黨': 'bar-tpp',
-  '無黨籍': 'bar-ind',
-}
-
-
-export default function HomePage() {
-  const declarations = getAllDeclarations()
-  const aggregatedStocks = getAggregatedStocks()
-
-  const marketTotals = new Map<string, number>()
-  for (const d of declarations) {
-    marketTotals.set(d.name, calcMarketTotal(d))
-  }
-
-  const ranked = [...declarations].sort((a, b) =>
-    (marketTotals.get(b.name) || 0) - (marketTotals.get(a.name) || 0)
-  )
-
-  // Compute party breakdown for top stocks
-  const topStocks = aggregatedStocks.slice(0, 10).map(s => {
-    const partyCounts: Record<string, number> = {}
-    const uniqueLegislators = new Set<string>()
-    for (const h of s.holders) {
-      if (uniqueLegislators.has(h.legislator)) continue
-      uniqueLegislators.add(h.legislator)
-      const meta = getLegislatorMeta(h.legislator)
-      const party = meta?.party || '其他'
-      partyCounts[party] = (partyCounts[party] || 0) + 1
-    }
-    return { ...s, partyCounts }
-  })
-  const topStocksData: StockBarData[] = topStocks.map(s => ({
-    name: s.name,
-    holderCount: s.holderCount,
-    partyCounts: s.partyCounts,
-  }))
-  const hero = ranked[0]
-  const heroMeta = hero ? getLegislatorMeta(hero.name) : null
-  const heroAmount = hero ? marketTotals.get(hero.name) || 0 : 0
-  const heroBorder = heroMeta?.party ? (PARTY_BORDER[heroMeta.party] || '') : ''
-  const top2to10 = ranked.slice(1, 10)
-  const rest = ranked.slice(10)
-
-  const listData = rest.map((d, i) => {
-    const meta = getLegislatorMeta(d.name)
-    return {
-      name: d.name,
-      slug: getSlugByName(d.name),
-      party: meta?.party || '',
-      avatar: meta?.avatar || '',
-      amount: marketTotals.get(d.name) || 0,
-      rank: i + 11,
-      borderColor: meta?.party ? (PARTY_BORDER[meta.party] || '') : '',
-    }
-  })
-
-  // Top holder amount for percentage bars in top 10
-  const maxAmount = heroAmount
-
-  // Party links data
-  const partyGroups = new Map<string, number>()
-  for (const d of declarations) {
-    const meta = getLegislatorMeta(d.name)
-    const party = meta?.party || '無黨籍'
-    partyGroups.set(party, (partyGroups.get(party) || 0) + 1)
-  }
+  const sections = [
+    {
+      title: "立法委員",
+      href: "/legislator",
+      icon: RiBankLine,
+      eyebrow: "中央民意代表",
+      stat: {
+        ...legislatorStat,
+        sub: "最多立委持有的股票",
+      },
+      links: [
+        { label: "瀏覽立委", href: "/legislator" },
+        { label: "看排行榜", href: "/legislator/rankings" },
+        { label: "查股票", href: "/legislator/stocks" },
+      ],
+    },
+    {
+      title: "縣市議員",
+      href: "/councilor",
+      icon: RiBuilding2Line,
+      eyebrow: "地方民意代表",
+      stat: {
+        ...councilorStat,
+        sub: "最多議員持有的股票",
+      },
+      links: [
+        { label: "縣市入口", href: "/councilor" },
+        { label: "臺北市", href: "/councilor/taipei" },
+        { label: "臺北排行", href: "/councilor/taipei/rankings" },
+      ],
+    },
+    {
+      title: "縣市首長",
+      href: "/mayor",
+      icon: RiUserStarLine,
+      eyebrow: "地方行政首長",
+      stat: {
+        ...mayorStat,
+        sub: "最多首長持有的股票",
+      },
+      links: [{ label: "申報入口", href: "/mayor" }],
+    },
+  ]
 
   return (
-    <div className="space-y-16">
-      <JsonLd data={{
-        '@context': 'https://schema.org',
-        '@type': 'WebSite',
-        name: '立委持股公開平台',
-        url: 'https://legislator-wealth.tw',
-        description: '台灣第十一屆立法委員股票及基金申報資料，資料來源為監察院公報，市值依據台灣證交所收盤價估算，並每日更新。',
-        potentialAction: {
-          '@type': 'SearchAction',
-          target: 'https://legislator-wealth.tw/?q={search_term_string}',
-          'query-input': 'required name=search_term_string',
-        },
-      }} />
-      {/* Title */}
-      <header className="pt-8 sm:pt-16">
-        <h1 className="font-heading text-5xl font-black tracking-tight sm:text-6xl">立委持股</h1>
-        <DataDateStatus className="mt-3" />
-        <div className="mt-3 space-y-1 text-sm text-muted-foreground">
-          <p>{declarations.length} 位第十一屆立法委員的股票及基金申報資料。資料來源為監察院公報，市值依據台灣證交所收盤價估算，並每日更新。</p>
-          <p>部分立委尚無公開申報紀錄，故未列出。資料由程式自動解析申報 PDF，若有錯誤歡迎至 <a href="https://github.com/f312213213/legislator-wealth.tw/issues" target="_blank" rel="noopener noreferrer" className="underline hover:text-foreground">GitHub</a> 回報。</p>
+    <div className="space-y-12">
+      <JsonLd data={createWebSiteJsonLd()} />
+
+      <header className="space-y-4 pt-6">
+        <div className="space-y-4">
+          <div>
+            <p className="text-sm font-medium text-muted-foreground">
+              公開申報資料
+            </p>
+            <h1 className="mt-2 font-heading text-4xl font-black tracking-tight sm:text-5xl">
+              政治人物持股
+            </h1>
+          </div>
+          <p className="max-w-3xl text-sm leading-relaxed text-muted-foreground">
+            資料由程式自動解析申報 PDF，若有錯誤歡迎至{" "}
+            <a
+              href="https://github.com/f312213213/legislator-wealth.tw/issues"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline hover:text-foreground"
+            >
+              GitHub
+            </a>{" "}
+            回報。
+          </p>
         </div>
       </header>
 
-      {/* Hero #1 */}
-      {hero && (
-        <section>
-          <Link
-            href={`/legislator/${getSlugByName(hero.name)}`}
-            className="group block border-b pb-8"
-          >
-            <p className="text-sm text-muted-foreground mb-4">持股市值最高</p>
-            <div className="flex items-end gap-5 sm:gap-8">
-              <div className={`flex h-24 w-24 shrink-0 items-center justify-center bg-muted overflow-hidden border-l-4 ${heroBorder} sm:h-32 sm:w-32`}>
-                {heroMeta?.avatar ? (
-                  <img src={heroMeta.avatar} alt={hero.name} width={128} height={128} className="h-full w-full object-cover"/>
-                ) : (
-                  <span className="text-4xl font-black text-muted-foreground">{hero.name.charAt(0)}</span>
-                )}
-              </div>
-              <div className="min-w-0 flex-1 space-y-1">
-                <h2 className="font-heading text-4xl font-black tracking-tight group-hover:underline decoration-2 underline-offset-4 sm:text-5xl">{hero.name}</h2>
-                <p className="text-sm text-muted-foreground">{heroMeta?.party}</p>
-                <p className="text-2xl font-black tabular-nums tracking-tight sm:text-3xl">
-                  <CurrencyDisplay amount={heroAmount}/>
-                </p>
-              </div>
+      <section className="grid gap-5 lg:grid-cols-3">
+        {sections.map((section, i) => {
+          const Icon = section.icon
+          return (
+            <div key={section.title} className={`fade-up fade-up-${i + 1}`}>
+              <article className="group relative flex h-full flex-col border-2 border-foreground bg-card transition-all duration-200 ease-out hover:-translate-x-1 hover:-translate-y-1 hover:shadow-[8px_8px_0_0_var(--foreground)]">
+                <Link href={section.href} className="block flex-1 p-5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="space-y-2">
+                      <p className="flex items-center gap-2 text-[11px] font-bold tracking-[0.18em] text-muted-foreground uppercase">
+                        <span className="font-heading text-lg leading-none font-black text-foreground tabular-nums">
+                          {String(i + 1).padStart(2, "0")}
+                        </span>
+                        {section.eyebrow}
+                      </p>
+                      <h2 className="font-heading text-3xl leading-none font-black tracking-tight">
+                        {section.title}
+                      </h2>
+                    </div>
+                    <span className="flex size-11 shrink-0 items-center justify-center bg-foreground text-background transition-transform duration-200 ease-out group-hover:scale-110 group-hover:rotate-[-6deg]">
+                      <Icon className="size-6" />
+                    </span>
+                  </div>
+                  <div className="mt-7 border-t-2 border-foreground pt-5">
+                    <div className="flex items-baseline gap-2.5">
+                      <span className="font-heading text-5xl leading-none font-black tracking-tight sm:text-6xl">
+                        {section.stat.topStock}
+                      </span>
+                      <span className="flex items-baseline font-heading text-xl leading-none font-black">
+                        ×
+                        <CountUp
+                          value={section.stat.topStockHolders}
+                          delayMs={i * 90 + 250}
+                          className="tabular-nums"
+                        />
+                        人
+                      </span>
+                    </div>
+                    <p className="mt-3 text-xs font-medium tracking-[0.12em] text-muted-foreground uppercase">
+                      {section.stat.sub}
+                    </p>
+                  </div>
+                  <div className="mt-7 inline-flex items-center gap-1.5 text-sm font-black tracking-wide uppercase">
+                    進入資料
+                    <RiArrowRightLine className="size-4 transition-transform duration-200 ease-out group-hover:translate-x-1.5" />
+                  </div>
+                </Link>
+                <div className="flex flex-wrap gap-2 border-t-2 border-foreground p-3">
+                  {section.links.map((link) => (
+                    <Link
+                      key={link.href}
+                      href={link.href}
+                      className="inline-flex h-7 items-center border border-foreground px-2.5 text-xs font-bold transition-colors duration-150 hover:bg-foreground hover:text-background"
+                    >
+                      {link.label}
+                    </Link>
+                  ))}
+                </div>
+              </article>
             </div>
-          </Link>
-        </section>
-      )}
-
-      {/* #2-10 with proportional bars */}
-      <section className="space-y-3">
-        <h2 className="text-lg font-bold">第 2 – 10 名</h2>
-        <div className="divide-y">
-          {top2to10.map((decl, i) => {
-            const meta = getLegislatorMeta(decl.name)
-            const amount = marketTotals.get(decl.name) || 0
-            const border = meta?.party ? (PARTY_BORDER[meta.party] || '') : ''
-            const barClass = meta?.party ? (PARTY_BAR[meta.party] || 'bg-foreground/10') : 'bg-foreground/10'
-            const pct = maxAmount > 0 ? (amount / maxAmount) * 100 : 0
-            return (
-              <Link
-                key={decl.name}
-                href={`/legislator/${getSlugByName(decl.name)}`}
-                className="row-hover relative flex items-center gap-3 px-3 py-2.5 sm:gap-4 sm:px-4"
-              >
-                {/* Background bar — proportional to #1 */}
-                <div className={`absolute inset-y-0 left-0 ${barClass}`} style={{ width: `${pct}%` }}/>
-                {/* Content */}
-                <span className="relative text-lg font-black text-muted-foreground/20 tabular-nums w-6 shrink-0 text-right">
-                  {i + 2}
-                </span>
-                <div className={`relative flex h-10 w-10 shrink-0 items-center justify-center bg-muted overflow-hidden border-l-2 ${border}`}>
-                  {meta?.avatar ? (
-                    <img src={meta.avatar} alt={decl.name} width={40} height={40} className="h-full w-full object-cover"/>
-                  ) : (
-                    <span className="text-sm font-bold text-muted-foreground">{decl.name.charAt(0)}</span>
-                  )}
-                </div>
-                <div className="relative min-w-0 flex-1">
-                  <span className="font-bold">{decl.name}</span>
-                  <span className="text-sm text-muted-foreground ml-2">{meta?.party}</span>
-                </div>
-                <span className="relative font-bold tabular-nums tracking-tight">
-                  <CurrencyDisplay amount={amount}/>
-                </span>
-              </Link>
-            )
-          })}
-        </div>
+          )
+        })}
       </section>
-
-      {/* Popular stocks */}
-      <section className="space-y-3">
-        <div className="flex items-baseline justify-between">
-          <h2 className="text-lg font-bold">最多立委持有的股票</h2>
-          <Link href="/stocks" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
-            全部明細
-          </Link>
-        </div>
-        <PartyBarChart stocks={topStocksData}/>
-      </section>
-
-      {/* All legislators */}
-      <section className="space-y-3">
-        <h2 className="text-lg font-bold">全部立委</h2>
-        <SearchableList legislators={listData}/>
-      </section>
-
-      {/* Party links */}
-      <section className="space-y-3">
-        <h2 className="text-lg font-bold">依政黨瀏覽</h2>
-        <div className="flex flex-wrap gap-2">
-          {Array.from(partyGroups.entries()).map(([party, count]) => {
-            const slug = PARTY_NAME_TO_SLUG[party]
-            if (!slug) return null
-            return (
-              <Link
-                key={party}
-                href={`/party/${slug}`}
-                className="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm hover:bg-muted transition-colors"
-              >
-                {party}
-                <span className="text-xs text-muted-foreground">({count})</span>
-              </Link>
-            )
-          })}
-        </div>
-      </section>
-
     </div>
   )
 }

@@ -2,13 +2,23 @@ import fs from 'fs'
 import path from 'path'
 import { pinyin } from 'pinyin-pro'
 import { getCouncilorCitySlugFromOrganization } from '../lib/councilor-routes'
-import type { CouncilorIndex, CouncilorMetaFile, DeclarationIndexEntry, LegislatorDocument, LegislatorIndex } from '../lib/types'
+import type {
+  CouncilorIndex,
+  CouncilorMetaFile,
+  DeclarationIndexEntry,
+  LegislatorDocument,
+  LegislatorIndex,
+  MayorIndex,
+  MayorMetaFile,
+} from '../lib/types'
 
 const DATA_DIR = path.join(process.cwd(), 'data')
 const LEGISLATORS_DIR = path.join(DATA_DIR, 'legislators')
 const COUNCILORS_DIR = path.join(DATA_DIR, 'councilors')
+const MAYORS_DIR = path.join(DATA_DIR, 'mayors')
 const META_PATH = path.join(DATA_DIR, 'legislators-meta.json')
 const COUNCILORS_META_PATH = path.join(DATA_DIR, 'councilors-meta.json')
+const MAYORS_META_PATH = path.join(DATA_DIR, 'mayors-meta.json')
 
 function toSlug(name: string): string {
   // Convert Chinese name to pinyin, lowercase, hyphenated
@@ -38,6 +48,21 @@ function loadCurrentCouncilorMeta(): Map<string, string> | null {
     return map
   } catch {
     console.warn(`Warning: ${path.relative(process.cwd(), COUNCILORS_META_PATH)} not found; councilor index will include all parsed councilors`)
+    return null
+  }
+}
+
+function loadCurrentMayorMeta(): Map<string, string> | null {
+  try {
+    const raw = fs.readFileSync(MAYORS_META_PATH, 'utf-8')
+    const data: MayorMetaFile = JSON.parse(raw)
+    const map = new Map<string, string>()
+    for (const meta of Object.values(data.mayors)) {
+      map.set(`${meta.organization}:${meta.name}`, meta.slug)
+    }
+    return map
+  } catch {
+    console.warn(`Warning: ${path.relative(process.cwd(), MAYORS_META_PATH)} not found; mayor index will include all parsed mayors`)
     return null
   }
 }
@@ -187,6 +212,30 @@ function main() {
   console.log(`Councilor index built: ${councilorIndex.councilors.length} councilors from ${councilorResult.fileCount} files (${councilorIndex.councilors.reduce((s, l) => s + l.declarations.length, 0)} declarations, ${councilorIndex.councilors.reduce((s, l) => s + l.changes.length, 0)} changes)`)
   if (councilorResult.skippedFileCount > 0) {
     console.log(`Skipped ${councilorResult.skippedFileCount} file(s) for ${councilorResult.skippedNames.size} non-current councilor(s): ${Array.from(councilorResult.skippedNames).sort((a, b) => a.localeCompare(b, 'zh-TW')).join(', ')}`)
+  }
+
+  const currentMayorMeta = loadCurrentMayorMeta()
+  const mayorResult = buildEntries({
+    documentsDir: MAYORS_DIR,
+    keyForDoc: doc => `${doc.organization}:${doc.name}`,
+    slugForDoc: doc => currentMayorMeta?.get(`${doc.organization}:${doc.name}`) ?? toSlug(doc.name),
+    shouldInclude: doc => !currentMayorMeta || currentMayorMeta.has(`${doc.organization}:${doc.name}`),
+  })
+
+  const mayorIndex: MayorIndex = {
+    mayors: mayorResult.entries,
+    lastUpdated: new Date().toISOString(),
+  }
+
+  fs.writeFileSync(
+    path.join(DATA_DIR, 'mayors-index.json'),
+    JSON.stringify(mayorIndex, null, 2),
+    'utf-8'
+  )
+
+  console.log(`Mayor index built: ${mayorIndex.mayors.length} mayors from ${mayorResult.fileCount} files (${mayorIndex.mayors.reduce((s, l) => s + l.declarations.length, 0)} declarations, ${mayorIndex.mayors.reduce((s, l) => s + l.changes.length, 0)} changes)`)
+  if (mayorResult.skippedFileCount > 0) {
+    console.log(`Skipped ${mayorResult.skippedFileCount} file(s) for ${mayorResult.skippedNames.size} non-current mayor(s): ${Array.from(mayorResult.skippedNames).sort((a, b) => a.localeCompare(b, 'zh-TW')).join(', ')}`)
   }
 }
 

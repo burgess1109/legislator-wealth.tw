@@ -5,7 +5,6 @@ import { ThemeProvider } from "@/components/theme-provider"
 import { SiteHeader } from "@/components/site-header"
 import { SiteFooter } from "@/components/site-footer"
 import { CurrencyFormatProvider } from "@/components/currency-format-provider"
-import { DisplayOptionsBar } from "@/components/display-options-bar"
 import { cn } from "@/lib/utils"
 import type { Metadata } from "next"
 
@@ -22,14 +21,14 @@ const notoSerifTC = Noto_Serif_TC({
 })
 
 const SITE_URL = 'https://legislator-wealth.tw'
-const SITE_NAME = '立委持股公開平台 — 台灣立法委員股票申報資料查詢'
-const SITE_DESCRIPTION = '台灣第十一屆立法委員股票及基金申報資料，資料來源為監察院公報，市值依據台灣證交所收盤價估算，並每日更新。'
+const SITE_NAME = '政治人物持股'
+const SITE_DESCRIPTION = '台灣民意代表與地方首長持股資料入口，分類瀏覽立法委員、縣市議員與縣市首長資料。'
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: {
     default: SITE_NAME,
-    template: '%s — 立委持股公開平台',
+    template: `%s — ${SITE_NAME}`,
   },
   description: SITE_DESCRIPTION,
   openGraph: {
@@ -73,7 +72,6 @@ export default function RootLayout({
         <ThemeProvider>
           <CurrencyFormatProvider>
             <SiteHeader />
-            <DisplayOptionsBar />
             <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6 fade-up">
               {children}
             </main>

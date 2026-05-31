@@ -7,14 +7,13 @@ export function SiteHeader() {
     <header className="sticky top-0 z-50 border-b bg-background">
       <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3 sm:px-6">
         <Link href="/" className="font-heading text-lg font-black tracking-tight text-nowrap">
-          立委持股
+          政治人物持股
         </Link>
-        <nav className="flex items-center gap-1">
+        <nav className="flex items-center gap-1 overflow-x-auto">
           <LinkButton href="/" variant="ghost" size="sm">首頁</LinkButton>
-          <LinkButton href="/councilor" variant="ghost" size="sm">地方議員</LinkButton>
-          <LinkButton href="/stocks" variant="ghost" size="sm">持股總覽</LinkButton>
-          <LinkButton href="/rankings" variant="ghost" size="sm">排行榜</LinkButton>
-          <LinkButton href="/changes" variant="ghost" size="sm">變動紀錄</LinkButton>
+          <LinkButton href="/legislator" variant="ghost" size="sm">立法委員</LinkButton>
+          <LinkButton href="/councilor" variant="ghost" size="sm">縣市議員</LinkButton>
+          <LinkButton href="/mayor" variant="ghost" size="sm">縣市首長</LinkButton>
           <ThemeToggle />
         </nav>
       </div>

@@ -1,5 +1,6 @@
 export interface LegislatorDeclaration {
   type: 'declaration'
+  declarationForm?: 'asset' | 'trust' | 'merged'
   name: string
   organization: string
   title: string
@@ -87,6 +88,11 @@ export interface CouncilorIndex {
   lastUpdated: string
 }
 
+export interface MayorIndex {
+  mayors: DeclarationIndexEntry[]
+  lastUpdated: string
+}
+
 export interface CouncilorMeta {
   name: string
   slug: string
@@ -103,8 +109,32 @@ export interface CouncilorMetaFile {
   source: {
     title: string
     url: string
+    urls?: string[]
     fetchedAt: string
     cities: string[]
   }
   councilors: Record<string, CouncilorMeta>
+}
+
+export interface MayorMeta {
+  name: string
+  slug: string
+  city: string
+  organization: string
+  title: string
+  party: string
+  avatar: string
+  detailUrl: string
+  sourceId: string
+}
+
+export interface MayorMetaFile {
+  source: {
+    title: string
+    url: string
+    urls?: string[]
+    fetchedAt: string
+    cities: string[]
+  }
+  mayors: Record<string, MayorMeta>
 }

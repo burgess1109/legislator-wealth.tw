@@ -36,11 +36,14 @@ pnpm-debug.log*
 /data/councilors/
 /data/councilors-index.json
 /data/councilors-meta.json
+/data/mayors/
+/data/mayors-index.json
+/data/mayors-meta.json
 /data/STOCK_DAY_ALL.json
 /data/tpex_mainboard_quotes.json
 /data/tpex_esb_latest_statistics.json
-/public/avatars/
 /public/api/
+/public/declaration-pdfs/
 /public/og/
 /public/og.png
 

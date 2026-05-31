@@ -48,13 +48,17 @@ export function calcCouncilorMarketTotal(data: LegislatorDeclaration): number {
 
 export function getCouncilorCityStaticParams(): { city: string }[] {
   const citySlugs = new Set<string>()
-  for (const meta of getAllCouncilorMeta()) {
-    citySlugs.add(getCouncilorCitySlug(meta.city))
-  }
   for (const councilor of getCouncilorIndex().councilors) {
+    if (councilor.declarations.length === 0 || !getCouncilorDeclarationBySlug(councilor.slug)) continue
     citySlugs.add(getCouncilorCitySlugFromOrganization(councilor.organization))
   }
   return Array.from(citySlugs).map(city => ({ city }))
+}
+
+export function hasCouncilorCityDeclarations(citySlug: string): boolean {
+  return getCouncilorIndexByCity(citySlug).some(entry =>
+    entry.declarations.length > 0 && Boolean(getCouncilorDeclarationBySlug(entry.slug))
+  )
 }
 
 export function buildCouncilorRows(citySlug: string): CouncilorListItem[] {

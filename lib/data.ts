@@ -6,26 +6,47 @@ import type {
   CouncilorIndex,
   CouncilorMeta,
   CouncilorMetaFile,
+  MayorIndex,
+  MayorMeta,
+  MayorMetaFile,
   DeclarationIndexEntry,
-} from './types'
+} from "./types"
 import {
   getCouncilorCitySlug,
   getCouncilorCitySlugFromOrganization,
   getCouncilorMemberSlug,
-} from './councilor-routes'
-import fs from 'fs'
-import path from 'path'
+} from "./councilor-routes"
+import fs from "fs"
+import path from "path"
 
-export type StockSource = 'stock' | 'fund'
+export type StockSource = "stock" | "fund"
+export type DeclarationPdfGroup = "legislators" | "councilors" | "mayors"
 
-const DATA_DIR = path.join(process.cwd(), 'data')
-const LEGISLATORS_DIR = path.join(DATA_DIR, 'legislators')
-const COUNCILORS_DIR = path.join(DATA_DIR, 'councilors')
-const COUNCILORS_INDEX_PATH = path.join(DATA_DIR, 'councilors-index.json')
-const COUNCILORS_META_PATH = path.join(DATA_DIR, 'councilors-meta.json')
+export interface DeclarationPdfDownload {
+  sourceFilename: string
+  pdfFilename: string
+  pdfId: string
+  href: string
+  label: string
+}
+
+const DATA_DIR = path.join(process.cwd(), "data")
+const LEGISLATORS_DIR = path.join(DATA_DIR, "legislators")
+const COUNCILORS_DIR = path.join(DATA_DIR, "councilors")
+const MAYORS_DIR = path.join(DATA_DIR, "mayors")
+const COUNCILORS_INDEX_PATH = path.join(DATA_DIR, "councilors-index.json")
+const MAYORS_INDEX_PATH = path.join(DATA_DIR, "mayors-index.json")
+const COUNCILORS_META_PATH = path.join(DATA_DIR, "councilors-meta.json")
+const MAYORS_META_PATH = path.join(DATA_DIR, "mayors-meta.json")
+const SOURCE_PDF_PATTERN = /(A\d{4}-\d{5})(?:-\d+)?\.json$/
+const DECLARATION_PDF_BASE_PATH = "/declaration-pdfs"
 
 // Stock price lookup from TWSE daily data
-interface StockPrice { code: string; name: string; closingPrice: number }
+interface StockPrice {
+  code: string
+  name: string
+  closingPrice: number
+}
 let _priceCache: Map<string, StockPrice> | null = null
 
 function getStockPrices(): Map<string, StockPrice> {
@@ -33,36 +54,72 @@ function getStockPrices(): Map<string, StockPrice> {
   _priceCache = new Map()
   // TWSE listed stocks
   try {
-    const raw = fs.readFileSync(path.join(DATA_DIR, 'STOCK_DAY_ALL.json'), 'utf-8')
-    const entries: { Code: string; Name: string; ClosingPrice: string }[] = JSON.parse(raw)
+    const raw = fs.readFileSync(
+      path.join(DATA_DIR, "STOCK_DAY_ALL.json"),
+      "utf-8"
+    )
+    const entries: { Code: string; Name: string; ClosingPrice: string }[] =
+      JSON.parse(raw)
     for (const e of entries) {
       const price = parseFloat(e.ClosingPrice)
       if (!price || isNaN(price)) continue
-      _priceCache.set(e.Name, { code: e.Code, name: e.Name, closingPrice: price })
+      _priceCache.set(e.Name, {
+        code: e.Code,
+        name: e.Name,
+        closingPrice: price,
+      })
     }
-  } catch { /* file may not exist */ }
+  } catch {
+    /* file may not exist */
+  }
   // TPEx (櫃買) stocks — fallback for names not found in TWSE
   try {
-    const raw = fs.readFileSync(path.join(DATA_DIR, 'tpex_mainboard_quotes.json'), 'utf-8')
-    const entries: { SecuritiesCompanyCode: string; CompanyName: string; Close: string }[] = JSON.parse(raw)
+    const raw = fs.readFileSync(
+      path.join(DATA_DIR, "tpex_mainboard_quotes.json"),
+      "utf-8"
+    )
+    const entries: {
+      SecuritiesCompanyCode: string
+      CompanyName: string
+      Close: string
+    }[] = JSON.parse(raw)
     for (const e of entries) {
       if (_priceCache.has(e.CompanyName)) continue
       const price = parseFloat(e.Close)
       if (!price || isNaN(price)) continue
-      _priceCache.set(e.CompanyName, { code: e.SecuritiesCompanyCode, name: e.CompanyName, closingPrice: price })
+      _priceCache.set(e.CompanyName, {
+        code: e.SecuritiesCompanyCode,
+        name: e.CompanyName,
+        closingPrice: price,
+      })
     }
-  } catch { /* file may not exist */ }
+  } catch {
+    /* file may not exist */
+  }
   // ESB (興櫃) stocks — fallback for names not found in TWSE or TPEx
   try {
-    const raw = fs.readFileSync(path.join(DATA_DIR, 'tpex_esb_latest_statistics.json'), 'utf-8')
-    const entries: { SecuritiesCompanyCode: string; CompanyName: string; LatestPrice: string }[] = JSON.parse(raw)
+    const raw = fs.readFileSync(
+      path.join(DATA_DIR, "tpex_esb_latest_statistics.json"),
+      "utf-8"
+    )
+    const entries: {
+      SecuritiesCompanyCode: string
+      CompanyName: string
+      LatestPrice: string
+    }[] = JSON.parse(raw)
     for (const e of entries) {
       if (_priceCache.has(e.CompanyName)) continue
       const price = parseFloat(e.LatestPrice)
       if (!price || isNaN(price)) continue
-      _priceCache.set(e.CompanyName, { code: e.SecuritiesCompanyCode, name: e.CompanyName, closingPrice: price })
+      _priceCache.set(e.CompanyName, {
+        code: e.SecuritiesCompanyCode,
+        name: e.CompanyName,
+        closingPrice: price,
+      })
     }
-  } catch { /* file may not exist */ }
+  } catch {
+    /* file may not exist */
+  }
   return _priceCache
 }
 
@@ -71,15 +128,17 @@ let _normalizedCache: Map<string, StockPrice> | null = null
 
 function normalizeStockName(name: string): string {
   return name
-    .replace(/[＊*]/g, '')
-    .replace(/[－–—]/g, '-')
-    .replace(/\s*-\s*K\s*Y.*$/i, '')
-    .replace(/\s*-\s*KY.*$/i, '')
-    .replace(/\s+/g, '')
+    .replace(/[＊*]/g, "")
+    .replace(/[－–—]/g, "-")
+    .replace(/\s*-\s*K\s*Y.*$/i, "")
+    .replace(/\s*-\s*KY.*$/i, "")
+    .replace(/\s+/g, "")
     .trim()
 }
 
-function getNormalizedPriceCache(prices: Map<string, StockPrice>): Map<string, StockPrice> {
+function getNormalizedPriceCache(
+  prices: Map<string, StockPrice>
+): Map<string, StockPrice> {
   if (_normalizedCache) return _normalizedCache
   _normalizedCache = new Map()
   for (const [name, price] of prices) {
@@ -91,7 +150,10 @@ function getNormalizedPriceCache(prices: Map<string, StockPrice>): Map<string, S
   return _normalizedCache
 }
 
-function lookupExactOrNormalized(prices: Map<string, StockPrice>, name: string): StockPrice | null {
+function lookupExactOrNormalized(
+  prices: Map<string, StockPrice>,
+  name: string
+): StockPrice | null {
   const exact = prices.get(name)
   if (exact) return exact
 
@@ -105,9 +167,9 @@ function hasUnlistedMarker(name: string): boolean {
 
 function stripDeclarationDecorations(name: string): string {
   return name
-    .replace(/新臺幣總額或折合新臺幣/g, '')
-    .replace(/[「『]?交付[^」』\s]*信託[」』]?/g, '')
-    .replace(/^\s*(?:上市|上櫃|興櫃|公開發行)股票?\s*[/／]\s*/g, '')
+    .replace(/新臺幣總額或折合新臺幣/g, "")
+    .replace(/[「『]?交付[^」』\s]*信託[」』]?/g, "")
+    .replace(/^\s*(?:上市|上櫃|興櫃|公開發行)股票?\s*[/／]\s*/g, "")
     .trim()
 }
 
@@ -115,26 +177,29 @@ function stockNameCandidates(name: string): string[] {
   const base = stripDeclarationDecorations(name)
   const candidates = [
     base,
-    base.replace(/金融控股股份有限公司$/, '金'),
-    base.replace(/工程$/, ''),
-    base.replace(/輪胎$/, ''),
-    base.replace(/海運$/, ''),
-    base.replace(/航運$/, ''),
-    base.replace(/證券$/, '證'),
-    base.replace(/科技股份有限公司$/, ''),
-    base.replace(/科技$/, ''),
-    base.replace(/股份有限公司$/, ''),
-    base.replace(/有限公司$/, ''),
+    base.replace(/金融控股股份有限公司$/, "金"),
+    base.replace(/工程$/, ""),
+    base.replace(/輪胎$/, ""),
+    base.replace(/海運$/, ""),
+    base.replace(/航運$/, ""),
+    base.replace(/證券$/, "證"),
+    base.replace(/科技股份有限公司$/, ""),
+    base.replace(/科技$/, ""),
+    base.replace(/股份有限公司$/, ""),
+    base.replace(/有限公司$/, ""),
   ]
 
-  return [...new Set(candidates.map(s => s.trim()).filter(Boolean))]
+  return [...new Set(candidates.map((s) => s.trim()).filter(Boolean))]
 }
 
 function isMarketFund(price: StockPrice): boolean {
   return /^0/.test(price.code)
 }
 
-function findUniqueContainedFundName(prices: Map<string, StockPrice>, cleaned: string): StockPrice | null {
+function findUniqueContainedFundName(
+  prices: Map<string, StockPrice>,
+  cleaned: string
+): StockPrice | null {
   if (cleaned.length < 3) return null
 
   const matches: { price: StockPrice; sourceName: string }[] = []
@@ -148,16 +213,23 @@ function findUniqueContainedFundName(prices: Map<string, StockPrice>, cleaned: s
 
   matches.sort((a, b) => b.sourceName.length - a.sourceName.length)
   if (matches.length === 0) return null
-  if (matches.length > 1 && matches[0].sourceName.length === matches[1].sourceName.length) return null
+  if (
+    matches.length > 1 &&
+    matches[0].sourceName.length === matches[1].sourceName.length
+  )
+    return null
   return matches[0].price
 }
 
-export function lookupStockPrice(name: string, source: StockSource = 'stock'): { code: string; price: number } | null {
+export function lookupStockPrice(
+  name: string,
+  source: StockSource = "stock"
+): { code: string; price: number } | null {
   if (hasUnlistedMarker(name)) return null
 
   const prices = getStockPrices()
   const exact = lookupExactOrNormalized(prices, name)
-  if (exact && (source === 'stock' || isMarketFund(exact))) {
+  if (exact && (source === "stock" || isMarketFund(exact))) {
     return { code: exact.code, price: exact.closingPrice }
   }
 
@@ -172,45 +244,115 @@ export function lookupStockPrice(name: string, source: StockSource = 'stock'): {
     }
   }
   const fromStripped = _strippedCache.get(cleaned)
-  if (fromStripped && (source === 'stock' || isMarketFund(fromStripped))) {
+  if (fromStripped && (source === "stock" || isMarketFund(fromStripped))) {
     return { code: fromStripped.code, price: fromStripped.closingPrice }
   }
 
-  if (source === 'stock') {
+  if (source === "stock") {
     for (const candidate of stockNameCandidates(name)) {
       const found = lookupExactOrNormalized(prices, candidate)
       if (found) return { code: found.code, price: found.closingPrice }
     }
   } else {
-    const contained = findUniqueContainedFundName(prices, normalizeStockName(stripDeclarationDecorations(name)))
-    if (contained) return { code: contained.code, price: contained.closingPrice }
+    const contained = findUniqueContainedFundName(
+      prices,
+      normalizeStockName(stripDeclarationDecorations(name))
+    )
+    if (contained)
+      return { code: contained.code, price: contained.closingPrice }
   }
 
   return null
 }
 
 export function getIndex(): LegislatorIndex {
-  const raw = fs.readFileSync(path.join(DATA_DIR, 'index.json'), 'utf-8')
+  const raw = fs.readFileSync(path.join(DATA_DIR, "index.json"), "utf-8")
   return JSON.parse(raw)
 }
 
 export function getCouncilorIndex(): CouncilorIndex {
   try {
-    const raw = fs.readFileSync(COUNCILORS_INDEX_PATH, 'utf-8')
+    const raw = fs.readFileSync(COUNCILORS_INDEX_PATH, "utf-8")
     return JSON.parse(raw)
   } catch {
-    return { councilors: [], lastUpdated: '' }
+    return { councilors: [], lastUpdated: "" }
   }
 }
 
-let _councilorMetaCache: CouncilorMetaFile | null = null
+export function getMayorIndex(): MayorIndex {
+  try {
+    const raw = fs.readFileSync(MAYORS_INDEX_PATH, "utf-8")
+    return JSON.parse(raw)
+  } catch {
+    return { mayors: [], lastUpdated: "" }
+  }
+}
+
+export function getSourcePdfFilename(documentFilename: string): string | null {
+  const match = documentFilename.match(SOURCE_PDF_PATTERN)
+  return match ? `${match[1]}.pdf` : null
+}
+
+function getDocumentForPdfGroup(
+  group: DeclarationPdfGroup,
+  filename: string
+): LegislatorDocument {
+  if (group === "councilors") return getCouncilorDocument(filename)
+  if (group === "mayors") return getMayorDocument(filename)
+  return getDocument(filename)
+}
+
+function getDocumentDateFromFilename(filename: string): string | null {
+  return filename.match(/\d{4}-\d{2}-\d{2}/)?.[0] ?? null
+}
+
+function getDownloadKindLabel(
+  group: DeclarationPdfGroup,
+  filename: string
+): string {
+  try {
+    const document = getDocumentForPdfGroup(group, filename)
+    if (document.type === "change") return "變動申報"
+    return declarationFormOf(document) === "trust" ? "信託申報" : "財產申報"
+  } catch {
+    return filename.includes("-change-") ? "變動申報" : "財產申報"
+  }
+}
+
+export function getDeclarationPdfDownloads(
+  group: DeclarationPdfGroup,
+  filenames: string[]
+): DeclarationPdfDownload[] {
+  const downloads: DeclarationPdfDownload[] = []
+  const seen = new Set<string>()
+
+  for (const sourceFilename of filenames) {
+    const pdfFilename = getSourcePdfFilename(sourceFilename)
+    if (!pdfFilename || seen.has(pdfFilename)) continue
+    seen.add(pdfFilename)
+
+    const pdfId = pdfFilename.replace(/\.pdf$/, "")
+    const date = getDocumentDateFromFilename(sourceFilename)
+    const kind = getDownloadKindLabel(group, sourceFilename)
+
+    downloads.push({
+      sourceFilename,
+      pdfFilename,
+      pdfId,
+      href: `${DECLARATION_PDF_BASE_PATH}/${group}/${pdfFilename}`,
+      label: `${date ? `${date} ` : ""}${kind}`,
+    })
+  }
+
+  return downloads
+}
 
 function emptyCouncilorMetaFile(): CouncilorMetaFile {
   return {
     source: {
-      title: '內政部地方公職人員資訊專區',
-      url: 'https://www.moi.gov.tw/LocalOfficial.aspx?n=573&TYP=KND0001',
-      fetchedAt: '',
+      title: "內政部地方公職人員資訊專區",
+      url: "https://www.moi.gov.tw/LocalOfficial.aspx?n=573&TYP=KND0001",
+      fetchedAt: "",
       cities: [],
     },
     councilors: {},
@@ -218,29 +360,73 @@ function emptyCouncilorMetaFile(): CouncilorMetaFile {
 }
 
 function getCouncilorMetaFile(): CouncilorMetaFile {
-  if (_councilorMetaCache) return _councilorMetaCache
   try {
-    const raw = fs.readFileSync(COUNCILORS_META_PATH, 'utf-8')
-    _councilorMetaCache = JSON.parse(raw)
+    const raw = fs.readFileSync(COUNCILORS_META_PATH, "utf-8")
+    return JSON.parse(raw)
   } catch {
     return emptyCouncilorMetaFile()
   }
-  return _councilorMetaCache!
+}
+
+function emptyMayorMetaFile(): MayorMetaFile {
+  return {
+    source: {
+      title: "內政部地方公職人員資訊專區",
+      url: "https://www.moi.gov.tw/LocalOfficial.aspx?n=579&TYP=KND0005",
+      fetchedAt: "",
+      cities: [],
+    },
+    mayors: {},
+  }
+}
+
+function getMayorMetaFile(): MayorMetaFile {
+  try {
+    const raw = fs.readFileSync(MAYORS_META_PATH, "utf-8")
+    return JSON.parse(raw)
+  } catch {
+    return emptyMayorMetaFile()
+  }
+}
+
+export function getMayorMetaSource(): MayorMetaFile["source"] {
+  return getMayorMetaFile().source
+}
+
+export function getAllMayorMeta(): MayorMeta[] {
+  return Object.values(getMayorMetaFile().mayors).sort(
+    (a, b) =>
+      a.city.localeCompare(b.city, "zh-TW") ||
+      a.name.localeCompare(b.name, "zh-TW")
+  )
+}
+
+export function getMayorMeta(
+  name: string,
+  organization?: string
+): MayorMeta | null {
+  return (
+    getAllMayorMeta().find(
+      (meta) =>
+        meta.name === name &&
+        (!organization || meta.organization === organization)
+    ) ?? null
+  )
 }
 
 export function getAllCouncilorMeta(): CouncilorMeta[] {
   return Object.values(getCouncilorMetaFile().councilors).sort((a, b) => {
-    const byCity = a.city.localeCompare(b.city, 'zh-TW')
+    const byCity = a.city.localeCompare(b.city, "zh-TW")
     if (byCity !== 0) return byCity
     const titleRank = (title: string) => {
-      if (title === '議長') return 0
-      if (title === '副議長') return 1
-      if (title.includes('代理')) return 2
+      if (title === "議長") return 0
+      if (title === "副議長") return 1
+      if (title.includes("代理")) return 2
       return 3
     }
     const byTitle = titleRank(a.title) - titleRank(b.title)
     if (byTitle !== 0) return byTitle
-    return a.name.localeCompare(b.name, 'zh-TW')
+    return a.name.localeCompare(b.name, "zh-TW")
   })
 }
 
@@ -249,53 +435,97 @@ export function getCouncilorMetaBySlug(slug: string): CouncilorMeta | null {
 }
 
 export function getCouncilorMetaByCity(citySlug: string): CouncilorMeta[] {
-  return getAllCouncilorMeta().filter(meta => getCouncilorCitySlug(meta.city) === citySlug)
-}
-
-export function getCouncilorIndexEntryBySlug(slug: string): DeclarationIndexEntry | null {
-  return getCouncilorIndex().councilors.find(councilor => councilor.slug === slug) ?? null
-}
-
-export function getCouncilorIndexByCity(citySlug: string): DeclarationIndexEntry[] {
-  return getCouncilorIndex().councilors.filter(councilor =>
-    getCouncilorCitySlugFromOrganization(councilor.organization) === citySlug
+  return getAllCouncilorMeta().filter(
+    (meta) => getCouncilorCitySlug(meta.city) === citySlug
   )
 }
 
-export function getCouncilorMetaByCityAndMemberSlug(citySlug: string, memberSlug: string): CouncilorMeta | null {
-  return getAllCouncilorMeta().find(meta =>
-    getCouncilorCitySlug(meta.city) === citySlug &&
-    (meta.slug === memberSlug || getCouncilorMemberSlug(meta.slug, citySlug) === memberSlug)
-  ) ?? null
+export function getLegislatorIndexEntryBySlug(
+  slug: string
+): DeclarationIndexEntry | null {
+  return (
+    getIndex().legislators.find((legislator) => legislator.slug === slug) ??
+    null
+  )
+}
+
+export function getCouncilorIndexEntryBySlug(
+  slug: string
+): DeclarationIndexEntry | null {
+  return (
+    getCouncilorIndex().councilors.find(
+      (councilor) => councilor.slug === slug
+    ) ?? null
+  )
+}
+
+export function getCouncilorIndexByCity(
+  citySlug: string
+): DeclarationIndexEntry[] {
+  return getCouncilorIndex().councilors.filter(
+    (councilor) =>
+      getCouncilorCitySlugFromOrganization(councilor.organization) === citySlug
+  )
+}
+
+export function getCouncilorMetaByCityAndMemberSlug(
+  citySlug: string,
+  memberSlug: string
+): CouncilorMeta | null {
+  return (
+    getAllCouncilorMeta().find(
+      (meta) =>
+        getCouncilorCitySlug(meta.city) === citySlug &&
+        (meta.slug === memberSlug ||
+          getCouncilorMemberSlug(meta.slug, citySlug) === memberSlug)
+    ) ?? null
+  )
 }
 
 export function getCouncilorIndexEntryByCityAndMemberSlug(
   citySlug: string,
   memberSlug: string
 ): DeclarationIndexEntry | null {
-  return getCouncilorIndex().councilors.find(councilor =>
-    getCouncilorCitySlugFromOrganization(councilor.organization) === citySlug &&
-    (councilor.slug === memberSlug || getCouncilorMemberSlug(councilor.slug, citySlug) === memberSlug)
-  ) ?? null
+  return (
+    getCouncilorIndex().councilors.find(
+      (councilor) =>
+        getCouncilorCitySlugFromOrganization(councilor.organization) ===
+          citySlug &&
+        (councilor.slug === memberSlug ||
+          getCouncilorMemberSlug(councilor.slug, citySlug) === memberSlug)
+    ) ?? null
+  )
 }
 
-export function getCouncilorSlugByCityAndMemberSlug(citySlug: string, memberSlug: string): string {
+export function getCouncilorSlugByCityAndMemberSlug(
+  citySlug: string,
+  memberSlug: string
+): string {
   const meta = getCouncilorMetaByCityAndMemberSlug(citySlug, memberSlug)
   if (meta) return meta.slug
 
   const entry = getCouncilorIndexEntryByCityAndMemberSlug(citySlug, memberSlug)
   if (entry) return entry.slug
 
-  return memberSlug.startsWith(`${citySlug}-`) ? memberSlug : `${citySlug}-${memberSlug}`
+  return memberSlug.startsWith(`${citySlug}-`)
+    ? memberSlug
+    : `${citySlug}-${memberSlug}`
 }
 
-export function getCouncilorMeta(name: string, organization?: string): CouncilorMeta | null {
-  return getAllCouncilorMeta().find(meta =>
-    meta.name === name && (!organization || meta.organization === organization)
-  ) ?? null
+export function getCouncilorMeta(
+  name: string,
+  organization?: string
+): CouncilorMeta | null {
+  return (
+    getAllCouncilorMeta().find(
+      (meta) =>
+        meta.name === name &&
+        (!organization || meta.organization === organization)
+    ) ?? null
+  )
 }
 
-export function getCouncilorMetaSource(): CouncilorMetaFile['source'] {
+export function getCouncilorMetaSource(): CouncilorMetaFile["source"] {
   return getCouncilorMetaFile().source
 }
 
@@ -303,17 +533,24 @@ export function getLatestDeclarationDate(): string {
   const index = getIndex()
   return index.legislators.reduce((latest, leg) => {
     if (!leg.latestDeclarationDate) return latest
-    return leg.latestDeclarationDate > latest ? leg.latestDeclarationDate : latest
-  }, '')
+    return leg.latestDeclarationDate > latest
+      ? leg.latestDeclarationDate
+      : latest
+  }, "")
 }
 
 export function getDocument(filename: string): LegislatorDocument {
-  const raw = fs.readFileSync(path.join(LEGISLATORS_DIR, filename), 'utf-8')
+  const raw = fs.readFileSync(path.join(LEGISLATORS_DIR, filename), "utf-8")
   return JSON.parse(raw)
 }
 
 export function getCouncilorDocument(filename: string): LegislatorDocument {
-  const raw = fs.readFileSync(path.join(COUNCILORS_DIR, filename), 'utf-8')
+  const raw = fs.readFileSync(path.join(COUNCILORS_DIR, filename), "utf-8")
+  return JSON.parse(raw)
+}
+
+export function getMayorDocument(filename: string): LegislatorDocument {
+  const raw = fs.readFileSync(path.join(MAYORS_DIR, filename), "utf-8")
   return JSON.parse(raw)
 }
 
@@ -321,91 +558,298 @@ export function getDeclaration(filename: string): LegislatorDeclaration {
   return getDocument(filename) as LegislatorDeclaration
 }
 
-export function getCouncilorDeclaration(filename: string): LegislatorDeclaration {
+export function getCouncilorDeclaration(
+  filename: string
+): LegislatorDeclaration {
   return getCouncilorDocument(filename) as LegislatorDeclaration
+}
+
+export function getMayorDeclaration(filename: string): LegislatorDeclaration {
+  return getMayorDocument(filename) as LegislatorDeclaration
+}
+
+function mergeDeclarations(
+  declarations: LegislatorDeclaration[]
+): LegislatorDeclaration | null {
+  const [base, ...rest] = declarations
+  if (!base) return null
+
+  const stocks = declarations.flatMap((d) => d.securities.stocks.items)
+  const funds = declarations.flatMap((d) => d.securities.funds.items)
+  const declarationDate = declarations.reduce(
+    (latest, d) => (d.declarationDate > latest ? d.declarationDate : latest),
+    base.declarationDate
+  )
+  const stockTotal = stocks.reduce((sum, item) => sum + item.ntdTotal, 0)
+  const fundTotal = funds.reduce((sum, item) => sum + item.ntdTotal, 0)
+  const notes = [base.notes, ...rest.map((d) => d.notes)]
+    .filter((note): note is string => Boolean(note))
+    .filter((note, index, all) => all.indexOf(note) === index)
+
+  return {
+    ...base,
+    declarationForm: declarations.length > 1 ? "merged" : base.declarationForm,
+    declarationDate,
+    securities: {
+      totalNTD: stockTotal + fundTotal,
+      stocks: {
+        totalNTD: stockTotal,
+        items: stocks,
+      },
+      funds: {
+        totalNTD: fundTotal,
+        items: funds,
+      },
+    },
+    notes: notes.length > 0 ? notes.join("\n") : undefined,
+  }
+}
+
+function declarationFormOf(
+  declaration: LegislatorDeclaration
+): "asset" | "trust" {
+  if (declaration.declarationForm === "trust") return "trust"
+  if (/信託財產申報/.test(declaration.declarationType)) return "trust"
+  return "asset"
+}
+
+function hasSecurityItems(declaration: LegislatorDeclaration): boolean {
+  return (
+    declaration.securities.stocks.items.length > 0 ||
+    declaration.securities.funds.items.length > 0
+  )
+}
+
+interface MayorDeclarationFile {
+  file: string
+  declaration: LegislatorDeclaration
+}
+
+function latestDeclarationFilesByForm(
+  declarations: MayorDeclarationFile[],
+  form: "asset" | "trust"
+): MayorDeclarationFile[] {
+  const matching = declarations.filter(
+    ({ declaration }) => declarationFormOf(declaration) === form
+  )
+  const latestDate = matching.reduce(
+    (latest, { declaration }) =>
+      declaration.declarationDate > latest
+        ? declaration.declarationDate
+        : latest,
+    ""
+  )
+  return latestDate
+    ? matching.filter(
+        ({ declaration }) => declaration.declarationDate === latestDate
+      )
+    : []
+}
+
+function latestMayorTrustDeclarationFiles(
+  declarations: MayorDeclarationFile[]
+): MayorDeclarationFile[] {
+  const trustDeclarations = declarations.filter(
+    ({ declaration }) => declarationFormOf(declaration) === "trust"
+  )
+  const trustWithHoldings = trustDeclarations.filter(({ declaration }) =>
+    hasSecurityItems(declaration)
+  )
+  return latestDeclarationFilesByForm(
+    trustWithHoldings.length > 0 ? trustWithHoldings : trustDeclarations,
+    "trust"
+  )
+}
+
+function getLatestMayorDeclarationFiles(
+  files: string[]
+): MayorDeclarationFile[] {
+  const declarations = files.map((file) => ({
+    file,
+    declaration: getMayorDeclaration(file),
+  }))
+
+  return [
+    ...latestDeclarationFilesByForm(declarations, "asset"),
+    ...latestMayorTrustDeclarationFiles(declarations),
+  ]
+}
+
+function getMergedMayorLatestDeclaration(
+  files: string[]
+): LegislatorDeclaration | null {
+  const selected = getLatestMayorDeclarationFiles(files)
+    .map(({ declaration }) => declaration)
+    .sort((a, b) => b.declarationDate.localeCompare(a.declarationDate))
+  return mergeDeclarations(selected)
 }
 
 export function getAllDeclarations(): LegislatorDeclaration[] {
   const index = getIndex()
   return index.legislators
-    .filter(leg => leg.declarations.length > 0)
-    .map(leg => getDeclaration(leg.declarations[0]))
+    .filter((leg) => leg.declarations.length > 0)
+    .map((leg) => getDeclaration(leg.declarations[0]))
 }
 
 export function getAllCouncilorDeclarations(): LegislatorDeclaration[] {
   const index = getCouncilorIndex()
   return index.councilors
-    .filter(councilor => councilor.declarations.length > 0)
-    .map(councilor => getCouncilorDeclaration(councilor.declarations[0]))
+    .filter((councilor) => councilor.declarations.length > 0)
+    .map((councilor) => getCouncilorDeclaration(councilor.declarations[0]))
 }
 
-export function getDeclarationByName(name: string): LegislatorDeclaration | null {
+export function getAllMayorDeclarations(): LegislatorDeclaration[] {
+  const index = getMayorIndex()
+  return index.mayors
+    .filter((mayor) => mayor.declarations.length > 0)
+    .map((mayor) => getMergedMayorLatestDeclaration(mayor.declarations))
+    .filter((declaration): declaration is LegislatorDeclaration =>
+      Boolean(declaration)
+    )
+}
+
+export interface HoldingStat {
+  /** Stock held by the most distinct people in this group. */
+  topStock: string
+  /** How many distinct people hold the top stock. */
+  topStockHolders: number
+}
+
+/**
+ * Find the most popular stock for a group of declarations, measured by distinct
+ * holders. Funds are excluded so the headline is a single recognizable equity.
+ */
+export function getHoldingStat(declarations: LegislatorDeclaration[]): HoldingStat {
+  const holders = new Map<string, Set<string>>()
+
+  for (const declaration of declarations) {
+    for (const stock of declaration.securities.stocks.items) {
+      let set = holders.get(stock.name)
+      if (!set) holders.set(stock.name, (set = new Set()))
+      set.add(declaration.name)
+    }
+  }
+
+  let topStock = ""
+  let topStockHolders = 0
+  for (const [name, set] of holders) {
+    if (set.size > topStockHolders) {
+      topStock = name
+      topStockHolders = set.size
+    }
+  }
+
+  return { topStock, topStockHolders }
+}
+
+export function getDeclarationByName(
+  name: string
+): LegislatorDeclaration | null {
   const index = getIndex()
-  const legislator = index.legislators.find(l => l.name === name)
+  const legislator = index.legislators.find((l) => l.name === name)
   if (!legislator || legislator.declarations.length === 0) return null
   return getDeclaration(legislator.declarations[0])
 }
 
-export function getDeclarationBySlug(slug: string): LegislatorDeclaration | null {
+export function getDeclarationBySlug(
+  slug: string
+): LegislatorDeclaration | null {
   const index = getIndex()
-  const legislator = index.legislators.find(l => l.slug === slug)
+  const legislator = index.legislators.find((l) => l.slug === slug)
   if (!legislator || legislator.declarations.length === 0) return null
   return getDeclaration(legislator.declarations[0])
 }
 
-export function getCouncilorDeclarationBySlug(slug: string): LegislatorDeclaration | null {
+export function getCouncilorDeclarationBySlug(
+  slug: string
+): LegislatorDeclaration | null {
   const index = getCouncilorIndex()
-  const councilor = index.councilors.find(c => c.slug === slug)
+  const councilor = index.councilors.find((c) => c.slug === slug)
   if (!councilor || councilor.declarations.length === 0) return null
   return getCouncilorDeclaration(councilor.declarations[0])
 }
 
+export function getMayorDeclarationBySlug(
+  slug: string
+): LegislatorDeclaration | null {
+  const index = getMayorIndex()
+  const mayor = index.mayors.find((m) => m.slug === slug)
+  if (!mayor || mayor.declarations.length === 0) return null
+  return getMergedMayorLatestDeclaration(mayor.declarations)
+}
+
+export function getMayorDeclarationFilesBySlug(slug: string): string[] {
+  const index = getMayorIndex()
+  const mayor = index.mayors.find((m) => m.slug === slug)
+  if (!mayor || mayor.declarations.length === 0) return []
+  return getLatestMayorDeclarationFiles(mayor.declarations).map(
+    ({ file }) => file
+  )
+}
+
 export function getChangesBySlug(slug: string): ChangeDeclaration[] {
   const index = getIndex()
-  const legislator = index.legislators.find(l => l.slug === slug)
-  if (!legislator || !legislator.changes || legislator.changes.length === 0) return []
-  return legislator.changes.map(f => getDocument(f) as ChangeDeclaration)
+  const legislator = index.legislators.find((l) => l.slug === slug)
+  if (!legislator || !legislator.changes || legislator.changes.length === 0)
+    return []
+  return legislator.changes.map((f) => getDocument(f) as ChangeDeclaration)
 }
 
 export function getCouncilorChangesBySlug(slug: string): ChangeDeclaration[] {
   const index = getCouncilorIndex()
-  const councilor = index.councilors.find(c => c.slug === slug)
-  if (!councilor || !councilor.changes || councilor.changes.length === 0) return []
-  return councilor.changes.map(f => getCouncilorDocument(f) as ChangeDeclaration)
+  const councilor = index.councilors.find((c) => c.slug === slug)
+  if (!councilor || !councilor.changes || councilor.changes.length === 0)
+    return []
+  return councilor.changes.map(
+    (f) => getCouncilorDocument(f) as ChangeDeclaration
+  )
+}
+
+export function getMayorChangesBySlug(slug: string): ChangeDeclaration[] {
+  const index = getMayorIndex()
+  const mayor = index.mayors.find((m) => m.slug === slug)
+  if (!mayor || !mayor.changes || mayor.changes.length === 0) return []
+  return mayor.changes.map((f) => getMayorDocument(f) as ChangeDeclaration)
 }
 
 export function getChangesByName(name: string): ChangeDeclaration[] {
   const index = getIndex()
-  const legislator = index.legislators.find(l => l.name === name)
-  if (!legislator || !legislator.changes || legislator.changes.length === 0) return []
-  return legislator.changes.map(f => getDocument(f) as ChangeDeclaration)
+  const legislator = index.legislators.find((l) => l.name === name)
+  if (!legislator || !legislator.changes || legislator.changes.length === 0)
+    return []
+  return legislator.changes.map((f) => getDocument(f) as ChangeDeclaration)
 }
 
 export function getSlugByName(name: string): string {
   const index = getIndex()
-  const legislator = index.legislators.find(l => l.name === name)
+  const legislator = index.legislators.find((l) => l.name === name)
   return legislator?.slug || encodeURIComponent(name)
 }
 
-export function getCouncilorSlugByName(name: string, organization?: string): string {
+export function getCouncilorSlugByName(
+  name: string,
+  organization?: string
+): string {
   const index = getCouncilorIndex()
-  const councilor = index.councilors.find(c =>
-    c.name === name && (!organization || c.organization === organization)
+  const councilor = index.councilors.find(
+    (c) => c.name === name && (!organization || c.organization === organization)
   )
   return councilor?.slug || encodeURIComponent(name)
 }
 
 export function getAllChanges(): ChangeDeclaration[] {
   const index = getIndex()
-  return index.legislators.flatMap(leg =>
-    (leg.changes || []).map(f => getDocument(f) as ChangeDeclaration)
+  return index.legislators.flatMap((leg) =>
+    (leg.changes || []).map((f) => getDocument(f) as ChangeDeclaration)
   )
 }
 
 export function getAllCouncilorChanges(): ChangeDeclaration[] {
   const index = getCouncilorIndex()
-  return index.councilors.flatMap(councilor =>
-    (councilor.changes || []).map(f => getCouncilorDocument(f) as ChangeDeclaration)
+  return index.councilors.flatMap((councilor) =>
+    (councilor.changes || []).map(
+      (f) => getCouncilorDocument(f) as ChangeDeclaration
+    )
   )
 }
 
@@ -429,7 +873,7 @@ export function getAllStockHoldings(): StockHolding[] {
 
   for (const decl of declarations) {
     for (const s of decl.securities.stocks.items) {
-      const priceInfo = lookupStockPrice(s.name, 'stock')
+      const priceInfo = lookupStockPrice(s.name, "stock")
       holdings.push({
         name: s.name,
         owner: s.owner,
@@ -438,14 +882,16 @@ export function getAllStockHoldings(): StockHolding[] {
         parValue: s.parValue,
         currency: s.currency,
         ntdTotal: s.ntdTotal,
-        source: 'stock',
+        source: "stock",
         stockCode: priceInfo?.code,
         marketPrice: priceInfo?.price,
-        marketValue: priceInfo ? Math.round(s.shares * priceInfo.price) : undefined,
+        marketValue: priceInfo
+          ? Math.round(s.shares * priceInfo.price)
+          : undefined,
       })
     }
     for (const f of decl.securities.funds.items) {
-      const priceInfo = lookupStockPrice(f.name, 'fund')
+      const priceInfo = lookupStockPrice(f.name, "fund")
       holdings.push({
         name: f.name,
         owner: f.owner,
@@ -454,10 +900,12 @@ export function getAllStockHoldings(): StockHolding[] {
         parValue: f.nav,
         currency: f.currency,
         ntdTotal: f.ntdTotal,
-        source: 'fund',
+        source: "fund",
         stockCode: priceInfo?.code,
         marketPrice: priceInfo?.price,
-        marketValue: priceInfo ? Math.round(f.units * priceInfo.price) : undefined,
+        marketValue: priceInfo
+          ? Math.round(f.units * priceInfo.price)
+          : undefined,
       })
     }
   }
@@ -467,7 +915,12 @@ export function getAllStockHoldings(): StockHolding[] {
 
 export interface AggregatedStock {
   name: string
-  holders: { legislator: string; owner: string; shares: number; ntdTotal: number }[]
+  holders: {
+    legislator: string
+    owner: string
+    shares: number
+    ntdTotal: number
+  }[]
   totalShares: number
   totalNTD: number
   holderCount: number
@@ -489,7 +942,9 @@ export function getAggregatedStocks(): AggregatedStock[] {
       existing.holders.push(holder)
       existing.totalShares += h.shares
       existing.totalNTD += h.ntdTotal
-      existing.holderCount = new Set(existing.holders.map(x => x.legislator)).size
+      existing.holderCount = new Set(
+        existing.holders.map((x) => x.legislator)
+      ).size
     } else {
       stockMap.set(h.name, {
         name: h.name,
@@ -501,7 +956,9 @@ export function getAggregatedStocks(): AggregatedStock[] {
     }
   }
 
-  return Array.from(stockMap.values()).sort((a, b) => b.holderCount - a.holderCount)
+  return Array.from(stockMap.values()).sort(
+    (a, b) => b.holderCount - a.holderCount
+  )
 }
 
 export interface LegislatorMeta {
@@ -514,7 +971,10 @@ let _metaCache: Record<string, LegislatorMeta> | null = null
 function getLegislatorMetaMap(): Record<string, LegislatorMeta> {
   if (_metaCache) return _metaCache
   try {
-    const raw = fs.readFileSync(path.join(DATA_DIR, 'legislators-meta.json'), 'utf-8')
+    const raw = fs.readFileSync(
+      path.join(DATA_DIR, "legislators-meta.json"),
+      "utf-8"
+    )
     _metaCache = JSON.parse(raw)
   } catch {
     _metaCache = {}
@@ -529,7 +989,7 @@ export function getLegislatorMeta(name: string): LegislatorMeta | null {
 
 export function getLegislatorsByParty(party: string): LegislatorDeclaration[] {
   const declarations = getAllDeclarations()
-  return declarations.filter(d => {
+  return declarations.filter((d) => {
     const meta = getLegislatorMeta(d.name)
     return meta?.party === party
   })
@@ -545,20 +1005,23 @@ export function getAllParties(): string[] {
 }
 
 export const PARTY_SLUG_MAP: Record<string, string> = {
-  'kmt': '中國國民黨',
-  'dpp': '民主進步黨',
-  'tpp': '台灣民眾黨',
-  'ind': '無黨籍',
+  kmt: "中國國民黨",
+  dpp: "民主進步黨",
+  tpp: "台灣民眾黨",
+  ind: "無黨籍",
 }
 
 export const PARTY_NAME_TO_SLUG: Record<string, string> = {
-  '中國國民黨': 'kmt',
-  '民主進步黨': 'dpp',
-  '台灣民眾黨': 'tpp',
-  '無黨籍': 'ind',
+  中國國民黨: "kmt",
+  民主進步黨: "dpp",
+  台灣民眾黨: "tpp",
+  無黨籍: "ind",
 }
 
-export function getStockPriceMap(): Record<string, { code: string; price: number }> {
+export function getStockPriceMap(): Record<
+  string,
+  { code: string; price: number }
+> {
   const prices = getStockPrices()
   const map: Record<string, { code: string; price: number }> = {}
   for (const [name, info] of prices) {
@@ -569,7 +1032,7 @@ export function getStockPriceMap(): Record<string, { code: string; price: number
 
 export interface FlatChange {
   legislator: string
-  category: 'stock'
+  category: "stock"
   name: string
   owner: string
   changeDate: string
@@ -588,13 +1051,13 @@ export function getAllFlatChanges(): FlatChange[] {
       for (const stock of change.stocks) {
         flat.push({
           legislator: change.name,
-          category: 'stock',
+          category: "stock",
           name: stock.name,
           owner: stock.owner,
           changeDate: stock.changeDate,
           changeReason: stock.changeReason,
           amount: stock.total,
-          detail: `${new Intl.NumberFormat('zh-TW').format(stock.shares)} 股 / ${stock.broker}`,
+          detail: `${new Intl.NumberFormat("zh-TW").format(stock.shares)} 股 / ${stock.broker}`,
           changePeriod: change.changePeriod,
         })
       }

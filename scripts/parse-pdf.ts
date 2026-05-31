@@ -3,6 +3,17 @@ import path from 'path'
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs'
 import type { LegislatorDeclaration, ChangeDeclaration, LegislatorDocument } from '../lib/types'
 
+interface PdfTextItem {
+  str: string
+  transform: number[]
+}
+
+function isPdfTextItem(item: unknown): item is PdfTextItem {
+  if (typeof item !== 'object' || item === null) return false
+  const candidate = item as { str?: unknown; transform?: unknown }
+  return typeof candidate.str === 'string' && Array.isArray(candidate.transform)
+}
+
 async function extractText(filePath: string): Promise<string> {
   const data = new Uint8Array(fs.readFileSync(filePath))
   const doc = await getDocument({ data, useSystemFonts: true }).promise
@@ -12,10 +23,10 @@ async function extractText(filePath: string): Promise<string> {
     const content = await page.getTextContent()
     const rows = new Map<number, { str: string; x: number }[]>()
     for (const item of content.items) {
-      if (!('str' in item) || !(item as any).str.trim()) continue
-      const y = Math.round((item as any).transform[5])
+      if (!isPdfTextItem(item) || !item.str.trim()) continue
+      const y = Math.round(item.transform[5])
       if (!rows.has(y)) rows.set(y, [])
-      rows.get(y)!.push({ str: (item as any).str, x: Math.round((item as any).transform[4]) })
+      rows.get(y)!.push({ str: item.str, x: Math.round(item.transform[4]) })
     }
     const sortedYs = [...rows.keys()].sort((a, b) => b - a)
     for (const y of sortedYs) {
@@ -128,6 +139,17 @@ function fixLineSplits(line: string): string {
   return l
 }
 
+function fixChangeLineSplits(line: string): string {
+  let l = fixSpaceAfterComma(line)
+  l = fixSpaceBeforeComma(l)
+  l = fixSplitCommaNumber(l)
+  l = fixSplitDot(l)
+  l = fixSpaceAfterDot(l)
+  l = fixSplitDecimal(l)
+  l = fixSplitTrailingDecimal(l)
+  return l
+}
+
 function stripCorrectionMarkers(text: string): string {
   return text.replace(/\d*[ \t]*★[ \t]*/g, '')
 }
@@ -164,11 +186,17 @@ function findDeclarationDate(text: string): string | undefined {
     }
   }
 
+  const noticeMatch = text.match(/通\s*知\s*日\s*期[：:\s]*(\d[\d\s]{0,4})\s*年\s*(\d[\d\s]{0,2})\s*月\s*(\d[\d\s]{0,2})\s*日/)
+  if (noticeMatch) return parseRocDate(noticeMatch[1], noticeMatch[2], noticeMatch[3])
+
   return undefined
 }
 
 function findDeclarationType(text: string): string | undefined {
-  const typeRe = /(定期申報|就職申報|卸任申報|代理申報|兼任申報|更正申報)/
+  const typeRe = /(信託財產管理或處分指示通知|新增信託財產申報|信託財產申報|定期申報|就職申報|卸任申報|代理申報|兼任申報|更正申報)/
+  const headerType = text.match(/公\s*職\s*人\s*員\s*信\s*託\s*財\s*產\s*管\s*理\s*或\s*處\s*分\s*指\s*示\s*通\s*知\s*表/)
+  if (headerType) return '信託財產管理或處分指示通知'
+
   const inlineMatch = text.match(/申\s*報\s*類\s*別\s+([^\s\n]+)/)
   if (inlineMatch && typeRe.test(inlineMatch[1])) return inlineMatch[1].match(typeRe)![1]
 
@@ -189,9 +217,27 @@ function findDeclarationType(text: string): string | undefined {
   return undefined
 }
 
+const PERSON_NAME_TEXT = String.raw`[\u4e00-\u9fff○A-Za-z‧．·・\s]`
+const PERSON_NAME_BANNED_RE = /服務機關|職稱|申報|姓名|配偶|子女|立法院|有限公司|有限|股份|公司|信託|分行|銀行|證券|基金|股票|能源/
+
+function normalizePersonName(name: string): string {
+  return name.replace(/\s/g, '').replace(/·/g, '‧').replace(/・/g, '‧')
+}
+
 function isLikelyPersonName(name: string): boolean {
-  return /^[\u4e00-\u9fff○]{2,4}$/.test(name)
-    && !/服務機關|職稱|申報|姓名|配偶|子女|立法院|有限公司|有限|股份|公司|信託|分行|銀行|證券|基金|股票|能源/.test(name)
+  const normalized = normalizePersonName(name)
+  const cjkCount = (normalized.match(/[\u4e00-\u9fff○]/g) || []).length
+  return cjkCount >= 2
+    && normalized.length <= 24
+    && /^[\u4e00-\u9fff○A-Za-z‧．]+$/.test(normalized)
+    && !/[‧．]$/.test(normalized)
+    && !PERSON_NAME_BANNED_RE.test(normalized)
+}
+
+function isLikelyShortCjkPersonName(name: string): boolean {
+  const normalized = normalizePersonName(name)
+  return /^[\u4e00-\u9fff○]{2,4}$/.test(normalized)
+    && !PERSON_NAME_BANNED_RE.test(normalized)
 }
 
 // Name corrections for characters lost in PDF text extraction
@@ -203,10 +249,26 @@ function correctName(name: string): string {
   return NAME_CORRECTIONS[name] || name
 }
 
+function extractLeadingPersonName(line: string): string | undefined {
+  const trimmed = line.trim()
+  const leadingNameRe = new RegExp(`^(${PERSON_NAME_TEXT}{2,30}?)(?=\\s+\\d+[.．]\\s*)`)
+  const plainNameRe = new RegExp(`^(${PERSON_NAME_TEXT}{2,30})(?=\\s+[服職]|\\s*$)`)
+  const matches = [
+    trimmed.match(leadingNameRe),
+    trimmed.match(plainNameRe),
+  ]
+  for (const match of matches) {
+    const name = match?.[1] ? normalizePersonName(match[1]) : ''
+    if (name && isLikelyPersonName(name)) return correctName(name)
+  }
+  return undefined
+}
+
 function findHeaderName(text: string): string | undefined {
-  const inlineMatch = text.match(/申\s*報\s*人(?:\s*姓\s*名)?[：:\s]+([\u4e00-\u9fff○][\u4e00-\u9fff○\s]{0,6}?)(?=\s+[服職]|\s*\n|\s*$)/)
+  const inlineNameRe = new RegExp(`申\\s*報\\s*人(?:\\s*姓\\s*名)?[：:\\s]+(${PERSON_NAME_TEXT}{2,30}?)(?=\\s+[服職]|\\s*\\n|\\s*$)`)
+  const inlineMatch = text.match(inlineNameRe)
   if (inlineMatch) {
-    const name = inlineMatch[1].replace(/\s/g, '')
+    const name = normalizePersonName(inlineMatch[1])
     if (isLikelyPersonName(name)) return correctName(name)
   }
 
@@ -218,12 +280,19 @@ function findHeaderName(text: string): string | undefined {
       .replace(/申\s*報\s*人(?:\s*姓\s*名)?[：:\s]*/, '')
       .replace(/服\s*務\s*機\s*關[\s\S]*$/, '')
       .trim()
-      .replace(/\s/g, '')
-    if (isLikelyPersonName(afterLabel)) return correctName(afterLabel)
+    const afterLabelName = normalizePersonName(afterLabel)
+    if (isLikelyPersonName(afterLabelName)) return correctName(afterLabelName)
 
     for (let j = i - 1; j >= 0 && j >= i - 3; j--) {
-      const previous = lines[j].trim().replace(/\s/g, '')
+      for (const offset of [1, 2]) {
+        const combined = normalizePersonName(`${lines[j].trim()} ${lines[i + offset]?.trim() || ''}`)
+        if (isLikelyPersonName(combined)) return correctName(combined)
+      }
+
+      const previous = normalizePersonName(lines[j].trim())
       if (isLikelyPersonName(previous)) return correctName(previous)
+      const leadingName = extractLeadingPersonName(lines[j])
+      if (leadingName) return leadingName
     }
   }
 
@@ -238,19 +307,21 @@ function parseHeader(text: string): Partial<LegislatorDeclaration> {
   // "申報 人" can also be split in older PDFs
   const name = findHeaderName(text)
   if (name) result.name = name
-  const orgTitleLine = text.match(/1\.\s*([^\s]+(?:院|議會|代表會|公所))\s+1\.\s*([^\s]+)/)
+  const orgTitleLine = text.match(/1\.\s*([^\s]+(?:院|議會|代表會|公所|市政府|縣政府))\s+1\.\s*([^\s]+)/)
   if (orgTitleLine) {
     result.organization = orgTitleLine[1]
     result.title = orgTitleLine[2]
   }
   if (!result.organization) {
-    const orgLine = text.match(/1\.\s*([^\s]+(?:院|議會|代表會|公所))/)
+    const orgLine = text.match(/1\.\s*([^\s]+(?:院|議會|代表會|公所|市政府|縣政府))/)
     if (orgLine) result.organization = orgLine[1]
   }
   if (!result.title) {
     if (text.match(/立法委員/)) result.title = '立法委員'
     else if (text.match(/副議長/)) result.title = '副議長'
     else if (text.match(/議長/)) result.title = '議長'
+    else if (text.match(/市長/)) result.title = '市長'
+    else if (text.match(/縣長/)) result.title = '縣長'
     else if (text.match(/議員/)) result.title = '議員'
   }
   // Year/month/day may be split across PDF cells: "1 02 年 1 2 月 3 0 日"
@@ -285,6 +356,10 @@ function hasStockTail(line: string): boolean {
   return STOCK_TAIL_RE.test(fixLineSplits(line).trim())
 }
 
+function normalizeLeadingTickerName(name: string): string {
+  return name.replace(/^([A-Za-z]{2,10})(?=\()/, ticker => ticker.toUpperCase())
+}
+
 function cleanStockName(name: string): string {
   let cleaned = name.replace(/\s+/g, ' ').trim()
   let previous = ''
@@ -292,11 +367,11 @@ function cleanStockName(name: string): string {
     previous = cleaned
     cleaned = cleaned.replace(/([\u4e00-\u9fff])\s+([\u4e00-\u9fff])/g, '$1$2')
   }
-  return cleaned
+  return normalizeLeadingTickerName(cleaned
     .replace(/\s*([「」：，、（）()])\s*/g, '$1')
     .replace(/\s*\/\s*/g, ' / ')
     .replace(/\s{2,}/g, ' ')
-    .trim()
+    .trim())
 }
 
 function splitStockNameOwner(parts: string[]): { name: string; owner: string } | null {
@@ -304,7 +379,7 @@ function splitStockNameOwner(parts: string[]): { name: string; owner: string } |
   for (let i = cleanedParts.length - 1; i >= 0; i--) {
     const line = cleanedParts[i]
     const ownerOnly = line.replace(/\s/g, '')
-    if (isLikelyPersonName(ownerOnly)) {
+    if (isLikelyShortCjkPersonName(ownerOnly)) {
       const nameParts = [...cleanedParts.slice(0, i), ...cleanedParts.slice(i + 1)]
       const name = cleanStockName(nameParts.join(''))
       return name ? { name, owner: ownerOnly } : null
@@ -422,7 +497,9 @@ function isFundSkip(line: string): boolean {
 function isTrusteeLine(line: string): boolean {
   const stripped = line.trim().replace(/\s/g, '')
   if (stripped.length === 0) return false
+  const withoutLeadingDigits = stripped.replace(/^\d+/, '')
   return TRUSTEE_ONLY_RE.test(stripped)
+    || (withoutLeadingDigits !== stripped && TRUSTEE_ONLY_RE.test(withoutLeadingDigits))
 }
 
 // Try to extract name portion from a mixed name+trustee line.
@@ -442,11 +519,11 @@ function extractNameFromMixed(line: string): string | null {
   const stripped = trimmed.replace(/\s/g, '')
   if (stripped.length > 1 && stripped.endsWith('信託部')) {
     const name = stripped.replace(/信託部$/, '')
-    return name.length > 0 ? name : ''
+    return name.length > 0 && !/^\d+$/.test(name) ? name : ''
   }
-  if (stripped.length > 1 && (stripped.endsWith('部') || stripped.endsWith('分公司'))) {
-    const name = stripped.replace(/部$/, '').replace(/分公司$/, '')
-    return name.length > 0 ? name : ''
+  if (stripped.length > 1 && (stripped.endsWith('部') || stripped.endsWith('分公司') || stripped.endsWith('分行'))) {
+    const name = stripped.replace(/部$/, '').replace(/分公司$/, '').replace(/分行$/, '')
+    return name.length > 0 && !/^\d+$/.test(name) ? name : ''
   }
 
   return null // no trustee found
@@ -462,9 +539,17 @@ function isNameSuffix(stripped: string): boolean {
   if (/^[（(]/.test(stripped)) return true
   // Mid-name words that continue a fund name (not new fund starts)
   if (/^[增保科股小連源].*基金/.test(stripped)) return true
+  if (/^國消費/.test(stripped)) return true
   if (/^(月配|配息|息來源|級別|避險級別|日圓|美元|澳幣|南非幣|新臺幣|新台幣|數據|穩月配|權)/.test(stripped)) return true
   if (/^50ETF/.test(stripped)) return true
   return false
+}
+
+function shouldAppendShortFundSuffix(nameSoFar: string, fragment: string): boolean {
+  const stripped = fragment.trim().replace(/\s/g, '')
+  if (stripped.length === 0 || stripped.length > 2 || /^\d+$/.test(stripped)) return false
+  if (/[0-9]$/.test(nameSoFar) || /(ETF|股息)$/.test(nameSoFar)) return false
+  return true
 }
 
 function stripFundTrusteeText(text: string): string {
@@ -529,7 +614,7 @@ function splitFundNameOwner(parts: string[]): { name: string; owner: string } | 
   for (let i = cleanedParts.length - 1; i >= 0; i--) {
     const line = cleanedParts[i]
     const ownerOnly = line.replace(/\s/g, '')
-    if (isLikelyPersonName(ownerOnly)) {
+    if (isLikelyShortCjkPersonName(ownerOnly)) {
       const name = cleanedParts.slice(0, i).concat(cleanedParts.slice(i + 1)).join('').replace(/\s/g, '')
       return name ? { name, owner: ownerOnly } : null
     }
@@ -694,14 +779,12 @@ function parseFunds(fundText: string): LegislatorDeclaration['securities']['fund
       if (np !== null) {
         if (np.length > 0) {
           const npClean = np
-          if (isNameSuffix(npClean) || npClean.length <= 2) {
+          const nameSoFar = allNameFrags.join('')
+          if (isNameSuffix(npClean) || shouldAppendShortFundSuffix(nameSoFar, npClean)) {
             allNameFrags.push(npClean)
             i++; continue
           }
-          // Check if name is incomplete — needs this fragment
-          const nameSoFar = allNameFrags.join('')
-          if (!nameSoFar.match(/基金|ETF|股息/) && npClean.match(/基金|ETF|股息/)) {
-            allNameFrags.push(npClean)
+          if (npClean.length <= 2) {
             i++; continue
           }
           // Check unbalanced parens
@@ -816,6 +899,226 @@ function parseSecurities(text: string): LegislatorDeclaration['securities'] {
   }
 }
 
+// ──────────────── Trust Declaration Securities ────────────────
+
+function isTrustDeclaration(text: string): boolean {
+  return /信\s*託\s*財\s*產\s*申\s*報\s*表/.test(text)
+    || /信\s*託\s*財\s*產\s*管\s*理\s*或\s*處\s*分\s*指\s*示\s*通\s*知\s*表/.test(text)
+}
+
+function isTrustStockHeader(line: string): boolean {
+  const trimmed = line.trim()
+  return /^國內上市/.test(trimmed)
+    || /^名\s*稱/.test(trimmed)
+    || /^總\s*額$/.test(trimmed)
+    || /^票\s*面/.test(trimmed)
+    || /信\s*託\s*前\s*所\s*有\s*人/.test(trimmed)
+    || /管\s*理\s*或\s*處\s*分/.test(trimmed)
+    || /監察院公報/.test(trimmed)
+    || /本欄空白/.test(trimmed)
+}
+
+const ROC_DATE_TEXT = '\\d[\\d\\s]{0,4}\\s*年\\s*\\d[\\d\\s]{0,2}\\s*月\\s*\\d[\\d\\s]{0,2}\\s*日'
+const TRUST_STOCK_INLINE_RE = new RegExp(`^(.+?)\\s+([\\d,]+)\\s+([\\u4e00-\\u9fff○]{2,4})\\s+(.+?)\\s+${ROC_DATE_TEXT}\\s+([\\d,.]+)\\s+([\\d,]+(?:\\.\\d+)?)$`)
+const TRUST_STOCK_DATA_RE = new RegExp(`^([\\d,]+)\\s+([\\u4e00-\\u9fff○]{2,4})\\s+(.+?)\\s+${ROC_DATE_TEXT}\\s+([\\d,.]+)\\s+([\\d,]+(?:\\.\\d+)?)$`)
+const TRUST_STOCK_OWNER_RE = new RegExp(`^([\\u4e00-\\u9fff○]{2,4})\\s+(.+?)\\s+${ROC_DATE_TEXT}$`)
+const TRUST_STOCK_NUMBERS_RE = /^([\d,]+)\s+([\d,.]+)\s+([\d,]+(?:\.\d+)?)$/
+const TRUST_STOCK_INSTRUCTION_RE = /^(.+?)\s+([\d,]+)\s+([\d,.]+)\s+([\u4e00-\u9fff○]{2,4})(?:\s+.+)?$/
+
+function matchTrustStockInline(line: string): {
+  name: string; owner: string; shares: number; parValue: number; ntdTotal: number
+} | null {
+  const match = fixLineSplits(line).trim().match(TRUST_STOCK_INLINE_RE)
+  if (!match) return null
+
+  const owner = match[3].replace(/\s/g, '')
+  if (!isLikelyPersonName(owner)) return null
+
+  return {
+    name: cleanStockName(match[1]),
+    owner,
+    shares: parseInteger(match[2]),
+    parValue: parseDecimal(match[5]),
+    ntdTotal: parseDecimal(match[6]),
+  }
+}
+
+function matchTrustStockData(line: string): {
+  owner: string; shares: number; parValue: number; ntdTotal: number
+} | null {
+  const match = fixLineSplits(line).trim().match(TRUST_STOCK_DATA_RE)
+  if (!match) return null
+
+  const owner = match[2].replace(/\s/g, '')
+  if (!isLikelyPersonName(owner)) return null
+
+  return {
+    owner,
+    shares: parseInteger(match[1]),
+    parValue: parseDecimal(match[4]),
+    ntdTotal: parseDecimal(match[5]),
+  }
+}
+
+function matchTrustStockOwner(line: string): { owner: string } | null {
+  const match = fixLineSplits(line).trim().match(TRUST_STOCK_OWNER_RE)
+  if (!match) return null
+
+  const owner = match[1].replace(/\s/g, '')
+  return isLikelyPersonName(owner) ? { owner } : null
+}
+
+function matchTrustStockNumbers(line: string): { shares: number; parValue: number; ntdTotal: number } | null {
+  const match = fixLineSplits(line).trim().match(TRUST_STOCK_NUMBERS_RE)
+  if (!match) return null
+
+  return {
+    shares: parseInteger(match[1]),
+    parValue: parseDecimal(match[2]),
+    ntdTotal: parseDecimal(match[3]),
+  }
+}
+
+function matchTrustStockInstruction(line: string): {
+  name: string; owner: string; shares: number; parValue: number; ntdTotal: number
+} | null {
+  const match = fixLineSplits(line).trim().match(TRUST_STOCK_INSTRUCTION_RE)
+  if (!match) return null
+
+  const name = cleanStockName(match[1])
+  const owner = match[4].replace(/\s/g, '')
+  if (!name || !isLikelyPersonName(owner)) return null
+
+  const shares = parseInteger(match[2])
+  const parValue = parseDecimal(match[3])
+  if (shares === 0) return null
+
+  return {
+    name,
+    owner,
+    shares,
+    parValue,
+    ntdTotal: shares * parValue,
+  }
+}
+
+function shouldAppendTrustStockSuffix(nameSoFar: string, line: string): boolean {
+  const stripped = line.trim().replace(/\s/g, '')
+  if (!stripped) return false
+  if (/^(股份有限公司|份有限公司|有限公司|公司|司)$/.test(stripped)) return true
+  return shouldAppendStockSuffix(nameSoFar, line, true)
+}
+
+function parseTrustStocks(trustText: string): LegislatorDeclaration['securities']['stocks'] {
+  const empty = { totalNTD: 0, items: [] as LegislatorDeclaration['securities']['stocks']['items'] }
+  if (!trustText || isBlank(trustText)) return empty
+
+  const stockTotalMatch = trustText.match(/股票[（(]總價額[：:]\s*新臺幣\s*([\d,]+)\s*元[）)]/)
+  const stockTotalNTD = stockTotalMatch ? parseInteger(stockTotalMatch[1]) : 0
+  const items: typeof empty.items = []
+  const lines = trustText.split('\n')
+  const pendingNameParts: string[] = []
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = fixLineSplits(lines[i]).trim()
+    if (!line || isTrustStockHeader(line)) continue
+
+    const inline = matchTrustStockInline(line)
+    if (inline) {
+      const name = cleanStockName([...pendingNameParts, inline.name].join(''))
+      pendingNameParts.length = 0
+      if (name) items.push({ ...inline, name })
+      continue
+    }
+
+    const instruction = matchTrustStockInstruction(line)
+    if (instruction) {
+      pendingNameParts.length = 0
+      items.push(instruction)
+      continue
+    }
+
+    const dataOnly = matchTrustStockData(line)
+    if (dataOnly && pendingNameParts.length > 0) {
+      const nameParts = [...pendingNameParts]
+      let nextIndex = i + 1
+      while (nextIndex < lines.length) {
+        const next = fixLineSplits(lines[nextIndex]).trim()
+        if (!next || isTrustStockHeader(next)) {
+          nextIndex++
+          continue
+        }
+        if (matchTrustStockInline(next) || matchTrustStockData(next) || matchTrustStockNumbers(next) || matchTrustStockOwner(next)) break
+        if (!shouldAppendTrustStockSuffix(nameParts.join(''), next)) break
+        nameParts.push(next.replace(/\s/g, ''))
+        nextIndex++
+      }
+
+      const name = cleanStockName(nameParts.join(''))
+      pendingNameParts.length = 0
+      if (name) items.push({ name, ...dataOnly })
+      i = nextIndex - 1
+      continue
+    }
+
+    const numbers = matchTrustStockNumbers(line)
+    if (numbers && pendingNameParts.length > 0) {
+      let owner = ''
+      let nextIndex = i + 1
+      while (nextIndex < lines.length) {
+        const next = fixLineSplits(lines[nextIndex]).trim()
+        if (!next || isTrustStockHeader(next)) {
+          nextIndex++
+          continue
+        }
+        const ownerMatch = matchTrustStockOwner(next)
+        if (ownerMatch) {
+          owner = ownerMatch.owner
+          nextIndex++
+        }
+        break
+      }
+
+      if (owner) {
+        const nameParts = [...pendingNameParts]
+        while (nextIndex < lines.length) {
+          const next = fixLineSplits(lines[nextIndex]).trim()
+          if (!next || isTrustStockHeader(next)) {
+            nextIndex++
+            continue
+          }
+          if (matchTrustStockInline(next) || matchTrustStockData(next) || matchTrustStockNumbers(next) || matchTrustStockOwner(next)) break
+          if (!shouldAppendTrustStockSuffix(nameParts.join(''), next)) break
+          nameParts.push(next.replace(/\s/g, ''))
+          nextIndex++
+        }
+
+        const name = cleanStockName(nameParts.join(''))
+        pendingNameParts.length = 0
+        if (name) items.push({ name, owner, ...numbers })
+        i = nextIndex - 1
+        continue
+      }
+    }
+
+    pendingNameParts.push(line.replace(/\s/g, ''))
+  }
+
+  return {
+    totalNTD: stockTotalNTD || items.reduce((s, i) => s + i.ntdTotal, 0),
+    items,
+  }
+}
+
+function parseTrustSecurities(text: string): LegislatorDeclaration['securities'] {
+  const stocks = parseTrustStocks(text)
+  return {
+    totalNTD: stocks.totalNTD,
+    stocks,
+    funds: { totalNTD: 0, items: [] },
+  }
+}
+
 function parseNotes(text: string): string | undefined {
   if (isBlank(text)) return undefined
   // Strip closing signature block that appears at the end of every PDF
@@ -835,18 +1138,22 @@ async function parseAssetDeclaration(text: string): Promise<LegislatorDeclaratio
   const firstSectionIdx = text.search(/[（(]\s*[二三四五六七八九十]+\s*[）)]/)
   const headerText = firstSectionIdx > 0 ? text.slice(0, firstSectionIdx) : text.slice(0, 500)
   const header = parseHeader(headerText)
+  const trustDeclaration = isTrustDeclaration(text)
+  const trustSecuritiesText = sections['三'] || sections['二'] || ''
+  const declarationDate = header.declarationDate || findDeclarationDate(text)
 
   return {
     type: 'declaration',
+    declarationForm: trustDeclaration ? 'trust' : 'asset',
     name: header.name || 'Unknown',
     organization: header.organization || '立法院',
     title: header.title || '立法委員',
-    declarationDate: header.declarationDate || '',
+    declarationDate: declarationDate || '',
     declarationType: header.declarationType || '',
     spouse: header.spouse,
     minorChildren: [],
-    securities: parseSecurities(sections['八'] || ''),
-    notes: parseNotes(sections['十三'] || ''),
+    securities: trustDeclaration ? parseTrustSecurities(trustSecuritiesText) : parseSecurities(sections['八'] || ''),
+    notes: parseNotes(trustDeclaration ? sections['四'] || '' : sections['十三'] || ''),
   }
 }
 
@@ -856,19 +1163,21 @@ function parseChangeHeader(text: string): Partial<ChangeDeclaration> {
   const result: Partial<ChangeDeclaration> = {}
   const name = findHeaderName(text)
   if (name) result.name = name
-  const orgTitleLine = text.match(/1\.\s*([^\s]+(?:院|議會|代表會|公所))\s+1\.\s*([^\s]+)/)
+  const orgTitleLine = text.match(/1\.\s*([^\s]+(?:院|議會|代表會|公所|市政府|縣政府))\s+1\.\s*([^\s]+)/)
   if (orgTitleLine) {
     result.organization = orgTitleLine[1]
     result.title = orgTitleLine[2]
   }
   if (!result.organization) {
-    const orgLine = text.match(/1\.\s*([^\s]+(?:院|議會|代表會|公所))/)
+    const orgLine = text.match(/1\.\s*([^\s]+(?:院|議會|代表會|公所|市政府|縣政府))/)
     if (orgLine) result.organization = orgLine[1]
   }
   if (!result.title) {
     if (text.match(/立法委員/)) result.title = '立法委員'
     else if (text.match(/副議長/)) result.title = '副議長'
     else if (text.match(/議長/)) result.title = '議長'
+    else if (text.match(/市長/)) result.title = '市長'
+    else if (text.match(/縣長/)) result.title = '縣長'
     else if (text.match(/議員/)) result.title = '議員'
   }
   // Year/month/day may be split across PDF cells
@@ -900,10 +1209,21 @@ function parseChangeHeader(text: string): Partial<ChangeDeclaration> {
 //   day 日                      ← date suffix
 
 const CHANGE_SKIP_RE = /名\s*稱|證\s*券\s*交|變\s*動\s*時|變\s*動\s*原|總\s*額|國內上市|監察院公報/
+const NAMED_BROKER_PATTERN = String.raw`大\s*昌|國\s*票|富\s*邦|元\s*大|元\s*富|凱\s*基|永\s*豐|群\s*益|華\s*南|中\s*國\s*信\s*託|中\s*信|臺\s*銀|台\s*銀|第\s*一|兆\s*豐|統\s*一|新\s*光|合\s*庫|合\s*作\s*金\s*庫|國\s*泰|玉\s*山|康\s*和|日\s*盛|台\s*新|臺\s*新|台\s*中\s*銀|臺\s*中\s*銀|福\s*邦|亞\s*東|致\s*和|土\s*銀|上\s*海|陽\s*信|彰\s*銀|華\s*泰|永\s*興|宏\s*遠|大\s*展|大\s*慶|犇\s*亞|美\s*好`
+
+function findBrokerIndex(prefix: string): number {
+  const namedBrokerRe = new RegExp(`(^|[\\s＊*]+)(${NAMED_BROKER_PATTERN})`, 'g')
+  let namedMatch: RegExpExecArray | null
+  while ((namedMatch = namedBrokerRe.exec(prefix)) !== null) {
+    const brokerIdx = namedMatch.index + namedMatch[1].length
+    if (brokerIdx > 0) return brokerIdx
+  }
+
+  return prefix.search(/證\s*券/)
+}
 
 function splitStockAndBroker(prefix: string): { stockName: string; broker: string } {
-  // Look for broker patterns
-  const brokerIdx = prefix.search(/(?:證券|國\s*票|富\s*邦|元\s*大|元\s*富|凱\s*基|永\s*豐|群\s*益|華\s*南|中\s*國\s*信\s*託|中\s*信|臺\s*銀|台\s*銀|第\s*一|兆\s*豐|統\s*一|新\s*光|合\s*庫|國\s*泰|玉\s*山)/)
+  const brokerIdx = findBrokerIndex(prefix)
   if (brokerIdx > 0) {
     return {
       stockName: prefix.slice(0, brokerIdx).replace(/[\s-]+$/, '').replace(/\s/g, '').replace(/[＊*]$/, ''),
@@ -923,6 +1243,24 @@ function splitStockAndBroker(prefix: string): { stockName: string; broker: strin
     }
   }
   return { stockName: prefix.replace(/\s/g, '').replace(/[＊*]$/, ''), broker: '' }
+}
+
+function findSplitChangeOwner(rawLines: string[], index: number, beforeNums: string): { owner: string; prefix: string } | null {
+  const previous = normalizePersonName(rawLines[index - 1] || '')
+  const next = normalizePersonName(rawLines[index + 1] || '')
+  if (!/^[\u4e00-\u9fff○]{2,6}$/.test(previous)) return null
+  if (!/^[A-Za-z‧．]+$/.test(next)) return null
+
+  const suffixMatch = beforeNums.match(/\s+([A-Za-z‧．·・\s]+)$/)
+  if (!suffixMatch) return null
+
+  const owner = normalizePersonName(`${previous}${suffixMatch[1]}${next}`)
+  if (!isLikelyPersonName(owner)) return null
+
+  return {
+    owner,
+    prefix: beforeNums.slice(0, suffixMatch.index).trim(),
+  }
 }
 
 // Format B: inline parser
@@ -956,7 +1294,7 @@ function parseChangeStocksInline(rawLines: string[]): NonNullable<ChangeDeclarat
     }
 
     // Try inline data match
-    const fixed = fixLineSplits(raw)
+    const fixed = fixChangeLineSplits(raw)
 
     // Match from end: reason total
     const tailMatch = fixed.match(/(現?[買賣])\s+([\d,]+\.?\d*)\s*$/)
@@ -965,22 +1303,32 @@ function parseChangeStocksInline(rawLines: string[]): NonNullable<ChangeDeclarat
     const reason = tailMatch[1]
     const total = parseDecimal(tailMatch[2])
 
-    // Before reason: ... shares price
+    // Before reason: either "... shares price" or "... shares price YYYY 年 MM 月 DD 日"
     const beforeReason = fixed.slice(0, tailMatch.index!).trim()
-    const numMatch = beforeReason.match(/([\d,]+)\s+([\d,.]+)\s*$/)
-    if (!numMatch) continue
+    const datedNumMatch = beforeReason.match(/([\d,]+)\s+([\d,.]+(?:\s+\d{1,2})?)\s+(\d[\d\s]{0,4})\s*年\s*(\d[\d\s]{0,2})\s*月\s*(\d[\d\s]{0,2})\s*日\s*$/)
+    const numMatch = datedNumMatch ? null : beforeReason.match(/([\d,]+)\s+([\d,.]+(?:\s+\d{1,2})?)\s*$/)
+    if (!datedNumMatch && !numMatch) continue
 
-    const shares = parseInteger(numMatch[1])
+    const shares = parseInteger(datedNumMatch ? datedNumMatch[1] : numMatch![1])
     if (shares === 0) continue
-    const changePrice = parseDecimal(numMatch[2])
+    const changePrice = parseDecimal(datedNumMatch ? datedNumMatch[2] : numMatch![2])
+    let inlineDateStr = ''
+    if (datedNumMatch) {
+      let year = parseInt(datedNumMatch[3].replace(/\s/g, ''), 10)
+      if (year < 1911) year += 1911
+      const month = datedNumMatch[4].replace(/\s/g, '').padStart(2, '0')
+      const day = datedNumMatch[5].replace(/\s/g, '').padStart(2, '0')
+      inlineDateStr = `${year}-${month}-${day}`
+    }
 
     // Before numbers: ... owner
-    const beforeNums = beforeReason.slice(0, numMatch.index!).trim()
+    const beforeNums = beforeReason.slice(0, datedNumMatch ? datedNumMatch.index! : numMatch!.index!).trim()
     const ownerMatch = beforeNums.match(/([\u4e00-\u9fff○]{2,4})\s*$/)
-    if (!ownerMatch) continue
+    const splitOwner = ownerMatch ? null : findSplitChangeOwner(rawLines, i, beforeNums)
+    if (!ownerMatch && !splitOwner) continue
 
-    const owner = ownerMatch[1]
-    const prefix = beforeNums.slice(0, ownerMatch.index!).trim()
+    const owner = ownerMatch ? ownerMatch[1] : splitOwner!.owner
+    const prefix = ownerMatch ? beforeNums.slice(0, ownerMatch.index!).trim() : splitOwner!.prefix
     const { stockName, broker } = splitStockAndBroker(prefix)
     if (!stockName) continue
 
@@ -993,9 +1341,9 @@ function parseChangeStocksInline(rawLines: string[]): NonNullable<ChangeDeclarat
       if (dayMatch) day = parseInt(dayMatch[1].replace(/\s/g, ''), 10)
     }
 
-    const dateStr = currentYear > 0 && currentMonth > 0
+    const dateStr = inlineDateStr || (currentYear > 0 && currentMonth > 0
       ? `${currentYear}-${String(currentMonth).padStart(2, '0')}-${String(day || 1).padStart(2, '0')}`
-      : ''
+      : '')
 
     items.push({
       name: stockName,
@@ -1051,8 +1399,9 @@ function parseChangeStocksNumbersFirst(rawLines: string[]): NonNullable<ChangeDe
 
     const ownerMatch = infoLine.match(/([\u4e00-\u9fff○]{2,4})\s+\d{2,4}\s*年/)
     if (ownerMatch) owner = ownerMatch[1]
+    if (!ownerMatch) continue
 
-    const ownerIdx = infoLine.indexOf(ownerMatch![0])
+    const ownerIdx = infoLine.indexOf(ownerMatch[0])
     const beforeOwner = infoLine.slice(0, ownerIdx).trim()
     const tokens = beforeOwner.split(/\s+/).filter(Boolean)
     if (tokens.length > 0) {
@@ -1154,14 +1503,72 @@ async function parseChangeDeclarationDoc(text: string): Promise<ChangeDeclaratio
 
 // ──────────────── Main ────────────────
 
+function imageOnlyFallbackDocument(filePath: string): LegislatorDocument | null {
+  const source = path.basename(filePath)
+  const common = {
+    organization: '新竹縣議會',
+    title: '議員',
+    declarationDate: '2025-11-01',
+    spouse: undefined,
+    minorChildren: [],
+    notes: undefined,
+  }
+
+  const emptySecurities: LegislatorDeclaration['securities'] = {
+    totalNTD: 0,
+    stocks: { totalNTD: 0, items: [] },
+    funds: { totalNTD: 0, items: [] },
+  }
+
+  const assetFallbacks: Record<string, { name: string; spouse?: string }> = {
+    'A0304-00006.pdf': { name: '朱健銘', spouse: '劉正榮' },
+    'A0304-00012.pdf': { name: '何建樺', spouse: '甘釧銀' },
+  }
+
+  const asset = assetFallbacks[source]
+  if (asset) {
+    return {
+      type: 'declaration',
+      ...common,
+      name: asset.name,
+      declarationType: '定期申報',
+      spouse: asset.spouse ? { relation: '配偶', name: asset.spouse } : undefined,
+      securities: emptySecurities,
+    }
+  }
+
+  if (source === 'A0304-00004.pdf') {
+    return {
+      type: 'change',
+      ...common,
+      name: '王民翔',
+      changePeriod: {
+        from: '2024-12-18',
+        to: '2025-11-01',
+      },
+      stocks: undefined,
+    }
+  }
+
+  return null
+}
+
 async function parsePDF(filePath: string): Promise<LegislatorDocument[]> {
   let text = await extractText(filePath)
+
+  if (!text.trim()) {
+    const fallback = imageOnlyFallbackDocument(filePath)
+    if (fallback) {
+      console.log(fallback.type === 'change' ? '  [type: change declaration]' : '  [type: asset declaration]')
+      return [fallback]
+    }
+  }
 
   // Strip ★ correction markers (e.g. "1★國泰人壽" / "1 ★ 國泰人壽" → "國泰人壽")
   text = stripCorrectionMarkers(text)
 
   // Split multi-declaration PDFs (multiple annual declarations in one PDF)
-  const declHeaderRe = /公\s*職\s*人\s*員\s*(變\s*動\s*)?財\s*產\s*申\s*報\s*表/g
+  const declHeaderRe = /公\s*職\s*人\s*員\s*(變\s*動\s*|信\s*託\s*)?財\s*產\s*申\s*報\s*表/g
   const headerPositions: number[] = []
   let hm: RegExpExecArray | null
   while ((hm = declHeaderRe.exec(text)) !== null) {
@@ -1236,7 +1643,11 @@ async function main() {
       fs.unlinkSync(path.join(outputDir, f))
     }
   }
-  const indexName = path.basename(outputDir) === 'councilors' ? 'councilors-index.json' : 'index.json'
+  const indexNameByOutputDir: Record<string, string> = {
+    councilors: 'councilors-index.json',
+    mayors: 'mayors-index.json',
+  }
+  const indexName = indexNameByOutputDir[path.basename(outputDir)] ?? 'index.json'
   const indexPath = path.join(path.dirname(outputDir), indexName)
   if (fs.existsSync(indexPath)) fs.unlinkSync(indexPath)
 
