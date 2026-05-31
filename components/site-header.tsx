@@ -10,7 +10,6 @@ export function SiteHeader() {
           政治人物持股
         </Link>
         <nav className="flex items-center gap-1 overflow-x-auto">
-          <LinkButton href="/" variant="ghost" size="sm">首頁</LinkButton>
           <LinkButton href="/legislator" variant="ghost" size="sm">立法委員</LinkButton>
           <LinkButton href="/councilor" variant="ghost" size="sm">縣市議員</LinkButton>
           <LinkButton href="/mayor" variant="ghost" size="sm">縣市首長</LinkButton>
