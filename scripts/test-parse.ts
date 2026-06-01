@@ -11,18 +11,37 @@ import fs from 'fs'
 import path from 'path'
 import { execSync } from 'child_process'
 import { lookupStockPrice } from '../lib/data'
+import type { ChangeDeclaration, LegislatorDeclaration, LegislatorDocument } from '../lib/types'
 
 const TEST_OUTPUT_DIR = path.join(process.cwd(), '.test-parse-output')
 const TEST_INPUT_DIR = path.join(process.cwd(), '.test-parse-input')
 
+type ChangeStockItem = NonNullable<ChangeDeclaration['stocks']>[number]
+
+interface ParsedTestDocument {
+  type?: LegislatorDocument['type']
+  name?: string
+  organization?: string
+  title?: string
+  declarationDate?: string
+  declarationType?: string
+  changePeriod?: Partial<ChangeDeclaration['changePeriod']>
+  spouse?: { relation?: string; name?: string }
+  securities: LegislatorDeclaration['securities']
+  stocks?: ChangeStockItem[]
+  notes?: string
+}
+
+type ParsedTestPayload = ParsedTestDocument & ParsedTestDocument[]
+
 interface TestCase {
   pdf: string
   description: string
-  checks: (doc: any) => string[]
+  checks: (doc: ParsedTestPayload) => string[]
 }
 
 // Helper: assert a value
-function eq(label: string, expected: any, actual: any): string | null {
+function eq(label: string, expected: unknown, actual: unknown): string | null {
   if (expected === actual) return null
   return `${label}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`
 }
@@ -83,14 +102,14 @@ const tests: TestCase[] = [
       ]
       // Individual stock checks
       const stocks = doc.securities.stocks.items
-      const tsmc = stocks.find((s: any) => s.name === '台積電')
+      const tsmc = stocks.find((s) => s.name === '台積電')
       e.push(tsmc ? null : 'missing stock: 台積電')
       if (tsmc) {
         e.push(eq('台積電.owner', '沈伯洋', tsmc.owner))
         e.push(eq('台積電.shares', 1000, tsmc.shares))
         e.push(eq('台積電.ntdTotal', 10000, tsmc.ntdTotal))
       }
-      const firstGold = stocks.find((s: any) => s.name === '第一金')
+      const firstGold = stocks.find((s) => s.name === '第一金')
       e.push(firstGold ? null : 'missing stock: 第一金')
       if (firstGold) {
         e.push(eq('第一金.owner', '曾心慧', firstGold.owner))
@@ -99,12 +118,12 @@ const tests: TestCase[] = [
       // Funds
       e.push(eq('funds.length', 3, doc.securities.funds.items.length))
       e.push(eq('funds.totalNTD', 1328310, doc.securities.funds.totalNTD))
-      const fundNames = doc.securities.funds.items.map((f: any) => f.name)
+      const fundNames = doc.securities.funds.items.map((f) => f.name)
       e.push(includes('funds', fundNames, '元大台灣50'))
       e.push(includes('funds', fundNames, '元大高股息'))
       e.push(includes('funds', fundNames, '元大台灣價值高息'))
       // 元大高股息 NAV should be 36.01 (split NAV fix: "3 6.01" → "36.01")
-      const yuantaDiv = doc.securities.funds.items.find((f: any) => f.name.includes('元大高股息'))
+      const yuantaDiv = doc.securities.funds.items.find((f) => f.name.includes('元大高股息'))
       if (yuantaDiv) {
         e.push(eq('元大高股息.nav', 36.01, yuantaDiv.nav))
         e.push(eq('元大高股息.units', 7000, yuantaDiv.units))
@@ -127,23 +146,23 @@ const tests: TestCase[] = [
         eq('funds.totalNTD', 5251070, doc.securities.funds.totalNTD),
       ]
       const stocks = doc.securities.stocks.items
-      const stockNames = stocks.map((s: any) => s.name)
+      const stockNames = stocks.map((s) => s.name)
       // All 8 stocks
       for (const name of ['茂矽', '英業達', '鴻海', '仁寶', '聯發科', '鈊象', '中天']) {
         e.push(includes('stocks', stockNames, name))
       }
       // 康霈＊ — full-width asterisk preserved
-      const kangpei = stocks.find((s: any) => s.name.includes('康霈'))
+      const kangpei = stocks.find((s) => s.name.includes('康霈'))
       e.push(kangpei ? null : 'missing stock: 康霈＊')
       if (kangpei) e.push(eq('康霈.name', '康霈＊', kangpei.name))
       // 英業達 split number fix: "2,2 80" → 2280
-      const yingye = stocks.find((s: any) => s.name === '英業達')
+      const yingye = stocks.find((s) => s.name === '英業達')
       if (yingye) e.push(eq('英業達.ntdTotal', 2280, yingye.ntdTotal))
       // Owner with ○ (redacted child names)
-      const childFunds = doc.securities.funds.items.filter((f: any) => f.owner.includes('○'))
+      const childFunds = doc.securities.funds.items.filter((f) => f.owner.includes('○'))
       e.push(gte('funds with ○ owner', 1, childFunds.length))
       // Specific fund name checks — multi-line reconstruction
-      const fundNames = doc.securities.funds.items.map((f: any) => f.name)
+      const fundNames = doc.securities.funds.items.map((f) => f.name)
       e.push(includes('funds', fundNames, '貝萊德世界科技基金（累積）（美元）'))
       e.push(includes('funds', fundNames, '瑞銀（盧森堡）大中華股票基金'))
       e.push(includes('funds', fundNames, 'PIMCO美國股票增益基金E'))
@@ -156,18 +175,18 @@ const tests: TestCase[] = [
       e.push(includes('funds', fundNames, '聯博-精選美國股票基金'))
       e.push(includes('funds', fundNames, '安本基金-北美小型公司基金'))
       // Funds with different currencies
-      const sgdFund = doc.securities.funds.items.find((f: any) => f.currency === '新加坡幣')
+      const sgdFund = doc.securities.funds.items.find((f) => f.currency === '新加坡幣')
       e.push(sgdFund ? null : 'missing fund with currency 新加坡幣')
-      const eurFund = doc.securities.funds.items.find((f: any) => f.currency === '歐元')
+      const eurFund = doc.securities.funds.items.find((f) => f.currency === '歐元')
       e.push(eurFund ? null : 'missing fund with currency 歐元')
       // NTD funds (no currency field)
-      const ntdFund = doc.securities.funds.items.find((f: any) => f.name.includes('匯豐') && !f.currency)
+      const ntdFund = doc.securities.funds.items.find((f) => f.name.includes('匯豐') && !f.currency)
       e.push(ntdFund ? null : 'missing NTD fund (匯豐 without currency)')
       // Fractional units
-      const pimco = doc.securities.funds.items.find((f: any) => f.name.includes('PIMCO'))
+      const pimco = doc.securities.funds.items.find((f) => f.name.includes('PIMCO'))
       if (pimco) e.push(eq('PIMCO.units is float', true, pimco.units % 1 !== 0))
       // NAV precision (4.8204 has 4 decimal places)
-      const sgHealth = doc.securities.funds.items.find((f: any) => f.name.includes('新加坡大華全球保健'))
+      const sgHealth = doc.securities.funds.items.find((f) => f.name.includes('新加坡大華全球保健'))
       if (sgHealth) e.push(eq('保健基金.nav', 4.8204, sgHealth.nav))
       return e.filter(Boolean) as string[]
     },
@@ -184,12 +203,12 @@ const tests: TestCase[] = [
         eq('spouse.name', '陳麗淩', doc.spouse?.name),
         gte('stocks.length', 20, doc.securities.stocks.items.length),
       ]
-      const stockNames = doc.securities.stocks.items.map((s: any) => s.name)
+      const stockNames = doc.securities.stocks.items.map((s) => s.name)
       for (const name of ['新纖', '濱川', '鴻海', '友訊', '智微', '精材', '廣明', '晶豪科', '協禧']) {
         e.push(includes('stocks', stockNames, name))
       }
       // Most stocks should be owned by 顏寬恒
-      const owners = new Set(doc.securities.stocks.items.map((s: any) => s.owner))
+      const owners = new Set(doc.securities.stocks.items.map((s) => s.owner))
       e.push(owners.has('顏寬恒') ? null : 'missing owner: 顏寬恒')
       // 北極星藥業 with -KY suffix
       e.push(includes('stocks', stockNames, '北極星藥業'))
@@ -209,31 +228,31 @@ const tests: TestCase[] = [
       // Should have many stocks (林月琴 + 蔡宗翰's holdings)
       e.push(gte('stocks.length', 40, stocks.length))
       // 台積電 should appear twice — once for each owner
-      const tsmc = stocks.filter((s: any) => s.name === '台積電')
+      const tsmc = stocks.filter((s) => s.name === '台積電')
       e.push(eq('台積電 count', 2, tsmc.length))
       // 蔡宗翰 should be a properly joined owner
-      const tsmcCai = tsmc.find((s: any) => s.owner === '蔡宗翰')
-      e.push(tsmcCai ? null : `台積電 蔡宗翰 not found, owners: [${tsmc.map((s: any) => s.owner).join(', ')}]`)
+      const tsmcCai = tsmc.find((s) => s.owner === '蔡宗翰')
+      e.push(tsmcCai ? null : `台積電 蔡宗翰 not found, owners: [${tsmc.map((s) => s.owner).join(', ')}]`)
       // No stock name should contain owner surname (broken split artifact)
-      const brokenNames = stocks.filter((s: any) => /蔡$/.test(s.name.trim()))
+      const brokenNames = stocks.filter((s) => /蔡$/.test(s.name.trim()))
       e.push(eq('no broken split names', 0, brokenNames.length))
-      if (brokenNames.length > 0) e.push(`broken names: ${brokenNames.map((s: any) => s.name).join(', ')}`)
+      if (brokenNames.length > 0) e.push(`broken names: ${brokenNames.map((s) => s.name).join(', ')}`)
       // 蔡宗翰 should own many stocks
-      const caiStocks = stocks.filter((s: any) => s.owner === '蔡宗翰')
+      const caiStocks = stocks.filter((s) => s.owner === '蔡宗翰')
       e.push(gte('蔡宗翰 stocks', 30, caiStocks.length))
       // 林月琴 should own some stocks too
-      const linStocks = stocks.filter((s: any) => s.owner === '林月琴')
+      const linStocks = stocks.filter((s) => s.owner === '林月琴')
       e.push(gte('林月琴 stocks', 1, linStocks.length))
       // Fund checks — decimal totals (Bug 1)
       e.push(gte('funds.length', 30, doc.securities.funds.items.length))
       e.push(eq('stocks.totalNTD', 9010000, doc.securities.stocks.totalNTD))
       // Decimal total: 富達新興市場基金 → 105,861.49
-      const fuda = doc.securities.funds.items.find((f: any) => f.name.includes('富達新興市場') && f.owner === '林月琴')
+      const fuda = doc.securities.funds.items.find((f) => f.name.includes('富達新興市場') && f.owner === '林月琴')
       if (fuda) {
         if (Math.abs(fuda.ntdTotal - 105861) > 2) e.push(`富達新興 ntdTotal: expected ~105861, got ${fuda.ntdTotal}`)
       } else e.push('missing: 富達新興市場基金')
       // 聯博全球 (蔡宗翰) → 613,740.08
-      const ab = doc.securities.funds.items.find((f: any) => f.name.includes('聯博') && f.owner === '蔡宗翰')
+      const ab = doc.securities.funds.items.find((f) => f.name.includes('聯博') && f.owner === '蔡宗翰')
       if (ab) {
         if (Math.abs(ab.ntdTotal - 613740) > 2) e.push(`聯博全球 ntdTotal: expected ~613740, got ${ab.ntdTotal}`)
       } else e.push('missing: 聯博全球 owned by 蔡宗翰')
@@ -253,12 +272,12 @@ const tests: TestCase[] = [
         eq('funds.length', 2, doc.securities.funds.items.length),
         eq('securities.totalNTD', 466713, doc.securities.totalNTD),
       ]
-      const morgan = doc.securities.funds.items.find((f: any) => f.name.includes('摩根') || f.name.includes('亞太'))
+      const morgan = doc.securities.funds.items.find((f) => f.name.includes('摩根') || f.name.includes('亞太'))
       if (morgan) {
         e.push(eq('morgan.currency', '美元', morgan.currency))
         e.push(eq('morgan.ntdTotal', 248175, morgan.ntdTotal))
       } else e.push('missing fund: 摩根基金-亞太入息基金')
-      const schroder = doc.securities.funds.items.find((f: any) => f.name.includes('施羅德'))
+      const schroder = doc.securities.funds.items.find((f) => f.name.includes('施羅德'))
       if (schroder) {
         e.push(eq('schroder.ntdTotal', 218538, schroder.ntdTotal))
       } else e.push('missing fund: 施羅德')
@@ -278,15 +297,15 @@ const tests: TestCase[] = [
       ]
       e.push(gte('stocks.length', 40, doc.securities.stocks.items.length))
       // 微星 appears 3 separate times
-      const msi = doc.securities.stocks.items.filter((s: any) => s.name === '微星')
+      const msi = doc.securities.stocks.items.filter((s) => s.name === '微星')
       e.push(eq('微星 entries', 3, msi.length))
       // English fund names
-      const fidelity500 = doc.securities.funds.items.find((f: any) => f.name.includes('Fidelity 500') || f.name.includes('Fidelity500'))
+      const fidelity500 = doc.securities.funds.items.find((f) => f.name.includes('Fidelity 500') || f.name.includes('Fidelity500'))
       e.push(fidelity500 ? null : 'missing fund: Fidelity 500 Index Fund')
-      const sqqq = doc.securities.funds.items.find((f: any) => f.name.includes('SQQQ'))
+      const sqqq = doc.securities.funds.items.find((f) => f.name.includes('SQQQ'))
       e.push(sqqq ? null : 'missing fund: SQQQ')
       // 群益店頭市場 fund name not corrupted by trustee stripping
-      const qunyi = doc.securities.funds.items.find((f: any) => f.name.includes('群益店頭市場'))
+      const qunyi = doc.securities.funds.items.find((f) => f.name.includes('群益店頭市場'))
       e.push(qunyi ? null : 'missing fund: 群益店頭市場')
       return e.filter(Boolean) as string[]
     },
@@ -301,12 +320,12 @@ const tests: TestCase[] = [
         eq('name', '翁曉玲', doc.name),
         eq('stocks.totalNTD', 1676280, doc.securities.stocks.totalNTD),
       ]
-      const wengStocks = doc.securities.stocks.items.filter((s: any) => s.owner === '翁曉玲')
-      const chenStocks = doc.securities.stocks.items.filter((s: any) => s.owner === '陳春生')
+      const wengStocks = doc.securities.stocks.items.filter((s) => s.owner === '翁曉玲')
+      const chenStocks = doc.securities.stocks.items.filter((s) => s.owner === '陳春生')
       e.push(gte('翁曉玲 stocks', 15, wengStocks.length))
       e.push(gte('陳春生 stocks', 5, chenStocks.length))
       // 陳春生's 元大高股息 fund
-      const chenFund = doc.securities.funds.items.find((f: any) => f.owner === '陳春生' && f.name.includes('元大高股息'))
+      const chenFund = doc.securities.funds.items.find((f) => f.owner === '陳春生' && f.name.includes('元大高股息'))
       if (chenFund) {
         e.push(eq('陳春生 元大高股息.ntdTotal', 1568000, chenFund.ntdTotal))
       } else e.push('missing: 陳春生 元大高股息')
@@ -326,11 +345,11 @@ const tests: TestCase[] = [
         eq('stocks.length', 8, doc.securities.stocks.items.length),
         eq('stocks.totalNTD', 2286230, doc.securities.stocks.totalNTD),
       ]
-      const taodi = doc.securities.stocks.items.find((s: any) => s.name.includes('淘帝'))
+      const taodi = doc.securities.stocks.items.find((s) => s.name.includes('淘帝'))
       if (taodi) {
         e.push(eq('淘帝-KY.ntdTotal', 500000, taodi.ntdTotal))
       } else e.push('missing: 淘帝-KY')
-      const yuqing = doc.securities.stocks.items.find((s: any) => s.name.includes('裕慶'))
+      const yuqing = doc.securities.stocks.items.find((s) => s.name.includes('裕慶'))
       if (yuqing) {
         e.push(eq('裕慶-KY.ntdTotal', 1310000, yuqing.ntdTotal))
       } else e.push('missing: 裕慶-KY')
@@ -349,11 +368,11 @@ const tests: TestCase[] = [
         eq('stocks.length', 13, doc.securities.stocks.items.length),
         eq('stocks.totalNTD', 12336790, doc.securities.stocks.totalNTD),
       ]
-      const dayang = doc.securities.stocks.items.find((s: any) => s.name === '大洋')
+      const dayang = doc.securities.stocks.items.find((s) => s.name === '大洋')
       if (dayang) {
         e.push(eq('大洋.shares', 330000, dayang.shares))
       } else e.push('missing: 大洋')
-      const wifeStocks = doc.securities.stocks.items.filter((s: any) => s.owner === '許素珍')
+      const wifeStocks = doc.securities.stocks.items.filter((s) => s.owner === '許素珍')
       e.push(eq('許素珍 stocks', 3, wifeStocks.length))
       return e.filter(Boolean) as string[]
     },
@@ -369,7 +388,7 @@ const tests: TestCase[] = [
         eq('stocks.length', 13, doc.securities.stocks.items.length),
         eq('stocks.totalNTD', 1734738, doc.securities.stocks.totalNTD),
       ]
-      const sy = doc.securities.stocks.items.find((s: any) => s.name.includes('SY') || s.name.includes('HOLDINGS'))
+      const sy = doc.securities.stocks.items.find((s) => s.name.includes('SY') || s.name.includes('HOLDINGS'))
       if (sy) {
         e.push(eq('SY.owner', '葉瑋玲', sy.owner))
         e.push(eq('SY.currency', '港幣', sy.currency))
@@ -388,7 +407,7 @@ const tests: TestCase[] = [
       eq('name', '李柏毅', doc.name),
       eq('declarationDate', '2025-11-01', doc.declarationDate),
       eq('stocks.totalNTD', 921680, doc.securities.stocks.totalNTD),
-      eq('stock sum matches total', 921680, doc.securities.stocks.items.reduce((s: number, x: any) => s + x.ntdTotal, 0)),
+      eq('stock sum matches total', 921680, doc.securities.stocks.items.reduce((sum, x) => sum + x.ntdTotal, 0)),
     ].filter(Boolean) as string[],
   },
 
@@ -402,7 +421,7 @@ const tests: TestCase[] = [
         eq('stocks.totalNTD', 2294680, doc.securities.stocks.totalNTD),
         eq('stocks.length', 2, doc.securities.stocks.items.length),
       ]
-      const unlisted = doc.securities.stocks.items.find((s: any) => s.name.includes('創意能源股份有限公司'))
+      const unlisted = doc.securities.stocks.items.find((s) => s.name.includes('創意能源股份有限公司'))
       e.push(unlisted ? null : 'missing split stock: 創意能源股份有限公司')
       if (unlisted) {
         e.push(eq('創意能源.owner', '廖偉翔', unlisted.owner))
@@ -425,10 +444,10 @@ const tests: TestCase[] = [
         eq('funds.totalNTD', 4837710, doc.securities.funds.totalNTD),
         eq('funds.length', 4, doc.securities.funds.items.length),
       ]
-      const stockNames = doc.securities.stocks.items.map((s: any) => s.name)
+      const stockNames = doc.securities.stocks.items.map((s) => s.name)
       e.push(includes('stocks', stockNames, '強普'))
       e.push(includes('stocks', stockNames, '晶隼'))
-      const aaFund = doc.securities.funds.items.find((f: any) => f.name.includes('AA穩定月'))
+      const aaFund = doc.securities.funds.items.find((f) => f.name.includes('AA穩定月'))
       e.push(aaFund ? null : 'missing split fund: 聯博 AA')
       if (aaFund) {
         e.push(eq('AA fund units', 1520.174, aaFund.units))
@@ -477,13 +496,13 @@ const tests: TestCase[] = [
       e.push(eq('changePeriod.from', '2024-03-16', doc.changePeriod?.from))
       e.push(eq('changePeriod.to', '2025-11-01', doc.changePeriod?.to))
       // 12 unique stock names
-      const uniqueNames = new Set(doc.stocks?.map((s: any) => s.name))
+      const uniqueNames = new Set(doc.stocks?.map((s) => s.name))
       e.push(gte('unique stocks', 10, uniqueNames.size))
       for (const name of ['南亞', '鴻海', '台積電', '國泰金', '凱基金', '緯創']) {
         e.push(uniqueNames.has(name) ? null : `missing stock: ${name}`)
       }
       // 凱基金 with 存券匯撥(存)
-      const kaiji = doc.stocks?.find((s: any) => s.name === '凱基金' && s.changeReason.includes('存券匯撥'))
+      const kaiji = doc.stocks?.find((s) => s.name === '凱基金' && s.changeReason.includes('存券匯撥'))
       e.push(kaiji ? null : 'missing: 凱基金 with 存券匯撥')
       if (kaiji) {
         e.push(eq('凱基金.reason', '存券匯撥(存)', kaiji.changeReason))
@@ -494,15 +513,15 @@ const tests: TestCase[] = [
         e.push(eq('凱基金.broker', '富邦證券板橋分公司', kaiji.broker))
       }
       // 凱基金 賣 — abbreviated broker
-      const kaijiSell = doc.stocks?.find((s: any) => s.name === '凱基金' && s.changeReason === '賣')
+      const kaijiSell = doc.stocks?.find((s) => s.name === '凱基金' && s.changeReason === '賣')
       if (kaijiSell) {
         e.push(eq('凱基金(賣).broker', '富邦-板橋', kaijiSell.broker))
       }
       // 南亞 — 4 transactions (2 買, 2 賣)
-      const nanya = doc.stocks?.filter((s: any) => s.name === '南亞')
+      const nanya = doc.stocks?.filter((s) => s.name === '南亞')
       e.push(eq('南亞 count', 4, nanya?.length || 0))
-      const nanyaBuy = nanya?.filter((s: any) => s.changeReason === '買')
-      const nanyaSell = nanya?.filter((s: any) => s.changeReason === '賣')
+      const nanyaBuy = nanya?.filter((s) => s.changeReason === '買')
+      const nanyaSell = nanya?.filter((s) => s.changeReason === '賣')
       e.push(eq('南亞 買 count', 2, nanyaBuy?.length || 0))
       e.push(eq('南亞 賣 count', 2, nanyaSell?.length || 0))
       // Notes should exist
@@ -526,12 +545,12 @@ const tests: TestCase[] = [
       e.push(eq('changePeriod.from', '2024-11-01', doc.changePeriod?.from))
       e.push(eq('changePeriod.to', '2025-11-01', doc.changePeriod?.to))
       // 8 unique stock names
-      const uniqueNames = new Set(doc.stocks?.map((s: any) => s.name))
+      const uniqueNames = new Set(doc.stocks?.map((s) => s.name))
       for (const name of ['大同舊', '大同', '上詮', '牧德', '東台', '華星光', '洋基工程', '伯特光']) {
         e.push(uniqueNames.has(name) ? null : `missing stock: ${name}`)
       }
       // 大同舊 with 減資轉入(存)
-      const datongOldIn = doc.stocks?.find((s: any) => s.name === '大同舊' && s.changeReason === '減資轉入(存)')
+      const datongOldIn = doc.stocks?.find((s) => s.name === '大同舊' && s.changeReason === '減資轉入(存)')
       e.push(datongOldIn ? null : 'missing: 大同舊 減資轉入(存)')
       if (datongOldIn) {
         e.push(eq('大同舊.shares', 110, datongOldIn.shares))
@@ -539,16 +558,16 @@ const tests: TestCase[] = [
         e.push(eq('大同舊.total', 4416.5, datongOldIn.total))
       }
       // 大同舊 with 減資轉出(提)
-      const datongOldOut = doc.stocks?.find((s: any) => s.name === '大同舊' && s.changeReason === '減資轉出(提)')
+      const datongOldOut = doc.stocks?.find((s) => s.name === '大同舊' && s.changeReason === '減資轉出(提)')
       e.push(datongOldOut ? null : 'missing: 大同舊 減資轉出(提)')
       // 大同 (not 大同舊) with 減資轉出(提)
-      const datongOut = doc.stocks?.find((s: any) => s.name === '大同' && s.changeReason === '減資轉出(提)')
+      const datongOut = doc.stocks?.find((s) => s.name === '大同' && s.changeReason === '減資轉出(提)')
       e.push(datongOut ? null : 'missing: 大同 減資轉出(提)')
       // 大同 with 減資轉入(存)
-      const datongIn = doc.stocks?.find((s: any) => s.name === '大同' && s.changeReason === '減資轉入(存)')
+      const datongIn = doc.stocks?.find((s) => s.name === '大同' && s.changeReason === '減資轉入(存)')
       e.push(datongIn ? null : 'missing: 大同 減資轉入(存)')
       // All owners should be 陳萬得
-      const owners = new Set(doc.stocks?.map((s: any) => s.owner))
+      const owners = new Set(doc.stocks?.map((s) => s.owner))
       e.push(eq('only owner is 陳萬得', true, owners.size === 1 && owners.has('陳萬得')))
       // Notes should be empty/null
       e.push(eq('notes', undefined, doc.notes))
@@ -582,21 +601,21 @@ const tests: TestCase[] = [
       ]
       e.push(gte('stocks.length', 250, doc.stocks?.length || 0))
       // All transactions belong to 謝俊雄
-      const owners = new Set(doc.stocks?.map((s: any) => s.owner) || [])
+      const owners = new Set(doc.stocks?.map((s) => s.owner) || [])
       if (!owners.has('謝俊雄')) e.push('missing owner: 謝俊雄')
       if (owners.size > 1) e.push(`unexpected extra owners: ${[...owners].filter(o => o !== '謝俊雄').join(', ')}`)
       // Verify specific stocks exist
-      const stockNames = new Set(doc.stocks?.map((s: any) => s.name) || [])
+      const stockNames = new Set(doc.stocks?.map((s) => s.name) || [])
       for (const expected of ['台南', '力山', '新光鋼', '南港', '華通', '國巨', '旺宏', '英業達',
         '所羅門', '陽明', '長榮航', '夏都', '公準', '緯創', '英濟', '新日興', '桓達', '均豪',
         '興能高', '南俊國際', '雷虎', '宏捷科', '高力', '世紀鋼']) {
         if (!stockNames.has(expected)) e.push(`missing stock: ${expected}`)
       }
       // First transaction: 台南, reason 買, total 30050
-      const firstTainan = doc.stocks?.find((s: any) => s.name === '台南' && s.changeReason === '買' && s.total === 30050)
+      const firstTainan = doc.stocks?.find((s) => s.name === '台南' && s.changeReason === '買' && s.total === 30050)
       e.push(firstTainan ? null : 'missing: first 台南 buy @ 30.05 = 30,050')
       // 世紀鋼 with 1000 shares
-      const shiji = doc.stocks?.find((s: any) => s.name === '世紀鋼' && s.shares === 1000 && s.total === 138000)
+      const shiji = doc.stocks?.find((s) => s.name === '世紀鋼' && s.shares === 1000 && s.total === 138000)
       e.push(shiji ? null : 'missing: 世紀鋼 1000 shares = 138,000')
       return e.filter(Boolean) as string[]
     },
@@ -613,14 +632,14 @@ const tests: TestCase[] = [
       ]
       e.push(gte('stocks.length', 75, doc.stocks?.length || 0))
       // All owned by 吳琪銘
-      const owners = new Set(doc.stocks?.map((s: any) => s.owner) || [])
+      const owners = new Set(doc.stocks?.map((s) => s.owner) || [])
       if (!owners.has('吳琪銘')) e.push('missing owner: 吳琪銘')
       // Verify 現買 and 現賣 reasons
-      const reasons = new Set(doc.stocks?.map((s: any) => s.changeReason) || [])
+      const reasons = new Set(doc.stocks?.map((s) => s.changeReason) || [])
       if (!reasons.has('現買')) e.push('missing reason: 現買')
       if (!reasons.has('現賣')) e.push('missing reason: 現賣')
       // Stock names
-      const stockNames = new Set(doc.stocks?.map((s: any) => s.name) || [])
+      const stockNames = new Set(doc.stocks?.map((s) => s.name) || [])
       for (const expected of ['永昕', '岱宇', '台泥', '順藥', '華安', '亞通', '聯華', '達興材料', '中工', '光洋科', '創控']) {
         if (!stockNames.has(expected)) e.push(`missing stock: ${expected}`)
       }
@@ -641,11 +660,11 @@ const tests: TestCase[] = [
         eq('changePeriod.to', '2025-11-01', doc.changePeriod?.to),
         eq('stocks.length', 15, doc.stocks?.length || 0),
       ]
-      const badNames = (doc.stocks || []).filter((s: any) => s.name === '1' || /★/.test(s.name + s.broker))
+      const badNames = (doc.stocks || []).filter((s) => s.name === '1' || /★/.test(s.name + s.broker))
       e.push(eq('no correction artifacts', 0, badNames.length))
-      const splitReason = doc.stocks?.find((s: any) => s.name === '國巨舊' && s.changeReason === '變更面額轉入(存)')
+      const splitReason = doc.stocks?.find((s) => s.name === '國巨舊' && s.changeReason === '變更面額轉入(存)')
       e.push(splitReason ? null : 'missing 國巨舊 變更面額轉入(存)')
-      const buy = doc.stocks?.find((s: any) => s.name === '國巨' && s.broker === '臺銀-新竹' && s.changeReason === '買')
+      const buy = doc.stocks?.find((s) => s.name === '國巨' && s.broker === '臺銀-新竹' && s.changeReason === '買')
       e.push(buy ? null : 'missing 國巨 buy with broker 臺銀-新竹')
       return e.filter(Boolean) as string[]
     },
@@ -711,10 +730,10 @@ const tests: TestCase[] = [
       if (!Array.isArray(docs)) return ['expected multi-declaration array']
       e.push(eq('declaration count', 9, docs.length))
       // All 9 should be named 林淑芬
-      const named = docs.filter((d: any) => d.name === '林淑芬')
+      const named = docs.filter((d) => d.name === '林淑芬')
       e.push(eq('all named 林淑芬', 9, named.length))
       // Every declaration should have a valid date (YYYY-MM-DD)
-      const withDates = docs.filter((d: any) => d.declarationDate && d.declarationDate.length === 10)
+      const withDates = docs.filter((d) => d.declarationDate && d.declarationDate.length === 10)
       e.push(eq('all have dates', 9, withDates.length))
       return e.filter(Boolean) as string[]
     },
@@ -771,8 +790,13 @@ async function main() {
 
   try {
     execSync(`npx tsx scripts/parse-pdf.ts --input ${TEST_INPUT_DIR} --output ${TEST_OUTPUT_DIR}`, { stdio: 'pipe' })
-  } catch (e: any) {
-    console.error('Parse failed:', e.stderr?.toString() || e.message)
+  } catch (error: unknown) {
+    const stderr =
+      typeof error === 'object' && error !== null && 'stderr' in error
+        ? String((error as { stderr?: { toString(): string } }).stderr?.toString() ?? '')
+        : ''
+    const message = error instanceof Error ? error.message : String(error)
+    console.error('Parse failed:', stderr || message)
     process.exit(1)
   }
 

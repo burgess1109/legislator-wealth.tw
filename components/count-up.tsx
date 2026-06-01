@@ -22,8 +22,8 @@ export function useCountUp(value: number, { delayMs = 0, durationMs = 900, enabl
       typeof window !== 'undefined' &&
       window.matchMedia('(prefers-reduced-motion: reduce)').matches
     if (!enabled || reduced || value === 0) {
-      setDisplay(value)
-      return
+      const raf = requestAnimationFrame(() => setDisplay(value))
+      return () => cancelAnimationFrame(raf)
     }
 
     let raf = 0
